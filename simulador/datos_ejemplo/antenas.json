@@ -1,0 +1,8 @@
+[
+  {"antenaId": "ANT-LIM-MIR-01-01", "zonaId": "LIM-MIR-01", "lat": -12.1205, "lon": -77.0281},
+  {"antenaId": "ANT-LIM-MIR-01-02", "zonaId": "LIM-MIR-01", "lat": -12.1238, "lon": -77.0312},
+  {"antenaId": "ANT-LIM-SJL-02-01", "zonaId": "LIM-SJL-02", "lat": -11.9870, "lon": -77.0021},
+  {"antenaId": "ANT-LIM-SJL-02-02", "zonaId": "LIM-SJL-02", "lat": -11.9902, "lon": -76.9994},
+  {"antenaId": "ANT-LIM-SBO-03-01", "zonaId": "LIM-SBO-03", "lat": -12.0921, "lon": -77.0012},
+  {"antenaId": "ANT-LIM-SBO-03-02", "zonaId": "LIM-SBO-03", "lat": -12.0950, "lon": -76.9990}
+]

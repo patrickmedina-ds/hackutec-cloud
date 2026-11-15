@@ -1,0 +1,5 @@
+[
+  {"zonaId": "LIM-MIR-01", "nombre": "Miraflores Centro", "tipoZona": "COMERCIAL", "ciudad": "Lima", "lat": -12.1219, "lon": -77.0297, "usuariosEstimados": 45000},
+  {"zonaId": "LIM-SJL-02", "nombre": "San Juan de Lurigancho Norte", "tipoZona": "RESIDENCIAL", "ciudad": "Lima", "lat": -11.9885, "lon": -77.0010, "usuariosEstimados": 120000},
+  {"zonaId": "LIM-SBO-03", "nombre": "San Borja Clinico", "tipoZona": "MEDICA", "ciudad": "Lima", "lat": -12.0936, "lon": -77.0005, "usuariosEstimados": 30000}
+]
