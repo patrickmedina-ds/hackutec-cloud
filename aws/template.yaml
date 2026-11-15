@@ -1,0 +1,1123 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Red TeleCorp - núcleo AWS (tablas, bus, Pipes, cola, Cognito, API, telemetría, portal) y stacks anidados
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedPattern: '^[a-z][a-z0-9]{1,9}$'
+    ConstraintDescription: Solo minúsculas y dígitos (se usa en nombres de reglas de IoT y dominios).
+    Description: Etapa del despliegue; prefijo de recursos telecorp-<Stage>-
+  UrlLocalPortal:
+    Type: String
+    Default: http://localhost:5173/
+    Description: URL del portal en desarrollo local (callback y logout de Cognito)
+  UrlsPortalAdicionales:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: Otras URLs de callback/logout del portal (opcional)
+  CorsOrigen:
+    Type: String
+    Default: '*'
+    Description: Origen permitido por CORS en la API
+  LimiteTasaWaf:
+    Type: Number
+    Default: 2000
+    MinValue: 100
+    Description: Peticiones por IP en 5 minutos antes de que WAF bloquee
+  ThrottlingTasa:
+    Type: Number
+    Default: 50
+    Description: Límite sostenido (req/s) de la etapa de la API
+  ThrottlingRafaga:
+    Type: Number
+    Default: 100
+    Description: Ráfaga máxima de la etapa de la API
+
+Conditions:
+  HayUrlsAdicionales: !Not [!Equals [!Join ['', !Ref UrlsPortalAdicionales], '']]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    Tracing: Active
+    Timeout: 30
+    MemorySize: 256
+    Layers:
+      - !Ref ComunLayer
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+        BUS_EVENTOS: !Sub telecorp-${Stage}-eventos
+        TABLA_INCIDENCIAS: !Sub telecorp-${Stage}-incidencias
+        TABLA_HISTORIAL: !Sub telecorp-${Stage}-historial-estados
+        TABLA_ZONA_VENTANA: !Sub telecorp-${Stage}-zona-ventana
+        TABLA_ZONAS: !Sub telecorp-${Stage}-zonas
+        TABLA_ANTENAS: !Sub telecorp-${Stage}-antenas
+        TABLA_METRICAS: !Sub telecorp-${Stage}-metricas-antena
+
+Resources:
+  # ------------------------------------------------------------------ Capa común
+  ComunLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub telecorp-${Stage}-comun
+      Description: telecorp_comun (estados, antenas, prioridad, eventos, nombres)
+      ContentUri: layers/comun/
+      CompatibleRuntimes: [python3.12]
+      CompatibleArchitectures: [arm64]
+      RetentionPolicy: Retain
+
+  # ------------------------------------------------------------------ Tablas DynamoDB
+  TablaIncidencias:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub telecorp-${Stage}-incidencias
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: incidenciaId, AttributeType: S }
+        - { AttributeName: zonaId, AttributeType: S }
+        - { AttributeName: estado, AttributeType: S }
+        - { AttributeName: incidenteColectivoId, AttributeType: S }
+        - { AttributeName: usuarioId, AttributeType: S }
+        - { AttributeName: creadoEn, AttributeType: S }
+      KeySchema:
+        - { AttributeName: incidenciaId, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: por-zona
+          KeySchema: [{ AttributeName: zonaId, KeyType: HASH }, { AttributeName: creadoEn, KeyType: RANGE }]
+          Projection: { ProjectionType: ALL }
+        - IndexName: por-estado
+          KeySchema: [{ AttributeName: estado, KeyType: HASH }, { AttributeName: creadoEn, KeyType: RANGE }]
+          Projection: { ProjectionType: ALL }
+        - IndexName: por-colectivo
+          KeySchema: [{ AttributeName: incidenteColectivoId, KeyType: HASH }, { AttributeName: creadoEn, KeyType: RANGE }]
+          Projection: { ProjectionType: ALL }
+        - IndexName: por-usuario
+          KeySchema: [{ AttributeName: usuarioId, KeyType: HASH }, { AttributeName: creadoEn, KeyType: RANGE }]
+          Projection: { ProjectionType: ALL }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  TablaHistorial:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub telecorp-${Stage}-historial-estados
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: incidenciaId, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: incidenciaId, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      StreamSpecification: { StreamViewType: NEW_IMAGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  TablaZonaVentana:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub telecorp-${Stage}-zona-ventana
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: zonaId, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: zonaId, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      StreamSpecification: { StreamViewType: NEW_IMAGE }
+      TimeToLiveSpecification: { AttributeName: ttl, Enabled: true }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  TablaZonas:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub telecorp-${Stage}-zonas
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: zonaId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: zonaId, KeyType: HASH }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  TablaAntenas:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub telecorp-${Stage}-antenas
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: antenaId, AttributeType: S }
+        - { AttributeName: zonaId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: antenaId, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: por-zona
+          KeySchema: [{ AttributeName: zonaId, KeyType: HASH }, { AttributeName: antenaId, KeyType: RANGE }]
+          Projection: { ProjectionType: ALL }
+      StreamSpecification: { StreamViewType: NEW_AND_OLD_IMAGES }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  TablaMetricas:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub telecorp-${Stage}-metricas-antena
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: antenaId, AttributeType: S }
+        - { AttributeName: ts, AttributeType: S }
+      KeySchema:
+        - { AttributeName: antenaId, KeyType: HASH }
+        - { AttributeName: ts, KeyType: RANGE }
+      TimeToLiveSpecification: { AttributeName: ttl, Enabled: true }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  # ------------------------------------------------------------------ Bus de eventos y archivo
+  BusEventos:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub telecorp-${Stage}-eventos
+
+  ArchivoEventos:
+    Type: AWS::Events::Archive
+    Properties:
+      ArchiveName: !Sub telecorp-${Stage}-eventos-archivo
+      Description: Archivo para reproducir los eventos de Red TeleCorp
+      SourceArn: !GetAtt BusEventos.Arn
+      RetentionDays: 14
+      EventPattern:
+        source:
+          - prefix: telecorp.
+
+  # ------------------------------------------------------------------ Pipes (streams -> bus)
+  PipeEnriquecer:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-pipe-enriquecer
+      Description: Convierte la imagen de DynamoDB Streams en el detail exacto del contrato de eventos
+      CodeUri: src/pipe_enriquecer/
+      Handler: app.lambda_handler
+      MemorySize: 128
+      Timeout: 10
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-pipe-enriquecer
+
+  PipesDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub telecorp-${Stage}-pipes-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  RolPipes:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub telecorp-${Stage}-pipes-${AWS::Region}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: pipes.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref 'AWS::AccountId' }
+      Policies:
+        - PolicyName: pipes
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:DescribeStream, dynamodb:GetRecords, dynamodb:GetShardIterator, dynamodb:ListStreams]
+                Resource:
+                  - !GetAtt TablaHistorial.StreamArn
+                  - !GetAtt TablaZonaVentana.StreamArn
+                  - !GetAtt TablaAntenas.StreamArn
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt PipeEnriquecer.Arn
+              - Effect: Allow
+                Action: events:PutEvents
+                Resource: !GetAtt BusEventos.Arn
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt PipesDlq.Arn
+
+  PipeHistorial:
+    Type: AWS::Pipes::Pipe
+    Properties:
+      Name: !Sub telecorp-${Stage}-pipe-historial
+      Description: historial-estados (INSERT) -> Incidencia.CambioEstado
+      RoleArn: !GetAtt RolPipes.Arn
+      DesiredState: RUNNING
+      Source: !GetAtt TablaHistorial.StreamArn
+      SourceParameters:
+        FilterCriteria:
+          Filters:
+            - Pattern: '{"eventName":["INSERT"]}'
+        DynamoDBStreamParameters:
+          StartingPosition: LATEST
+          BatchSize: 10
+          MaximumBatchingWindowInSeconds: 1
+          MaximumRetryAttempts: 5
+          DeadLetterConfig: { Arn: !GetAtt PipesDlq.Arn }
+      Enrichment: !GetAtt PipeEnriquecer.Arn
+      Target: !GetAtt BusEventos.Arn
+      TargetParameters:
+        EventBridgeEventBusParameters:
+          DetailType: Incidencia.CambioEstado
+          Source: telecorp.incidencias
+
+  PipeZonaVentana:
+    Type: AWS::Pipes::Pipe
+    Properties:
+      Name: !Sub telecorp-${Stage}-pipe-zona-umbral
+      Description: zona-ventana (INSERT del marcador COLECTIVO_ACTIVO) -> Zona.UmbralSuperado
+      RoleArn: !GetAtt RolPipes.Arn
+      DesiredState: RUNNING
+      Source: !GetAtt TablaZonaVentana.StreamArn
+      SourceParameters:
+        FilterCriteria:
+          Filters:
+            - Pattern: '{"eventName":["INSERT"],"dynamodb":{"NewImage":{"sk":{"S":["COLECTIVO_ACTIVO"]}}}}'
+        DynamoDBStreamParameters:
+          StartingPosition: LATEST
+          BatchSize: 10
+          MaximumBatchingWindowInSeconds: 1
+          MaximumRetryAttempts: 5
+          DeadLetterConfig: { Arn: !GetAtt PipesDlq.Arn }
+      Enrichment: !GetAtt PipeEnriquecer.Arn
+      Target: !GetAtt BusEventos.Arn
+      TargetParameters:
+        EventBridgeEventBusParameters:
+          DetailType: Zona.UmbralSuperado
+          Source: telecorp.zonas
+
+  PipeAntenas:
+    Type: AWS::Pipes::Pipe
+    Properties:
+      Name: !Sub telecorp-${Stage}-pipe-antenas
+      Description: antenas (MODIFY) -> Antena.CambioEstado
+      RoleArn: !GetAtt RolPipes.Arn
+      DesiredState: RUNNING
+      Source: !GetAtt TablaAntenas.StreamArn
+      SourceParameters:
+        FilterCriteria:
+          Filters:
+            - Pattern: '{"eventName":["MODIFY"]}'
+        DynamoDBStreamParameters:
+          StartingPosition: LATEST
+          BatchSize: 10
+          MaximumBatchingWindowInSeconds: 1
+          MaximumRetryAttempts: 5
+          DeadLetterConfig: { Arn: !GetAtt PipesDlq.Arn }
+      Enrichment: !GetAtt PipeEnriquecer.Arn
+      Target: !GetAtt BusEventos.Arn
+      TargetParameters:
+        EventBridgeEventBusParameters:
+          DetailType: Antena.CambioEstado
+          Source: telecorp.antenas
+
+  # ------------------------------------------------------------------ Cola de reportes
+  ColaReportesDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub telecorp-${Stage}-reportes-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  ColaReportes:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub telecorp-${Stage}-reportes
+      VisibilityTimeout: 60
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ColaReportesDlq.Arn
+        maxReceiveCount: 5
+
+  # ------------------------------------------------------------------ Cognito
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub telecorp-${Stage}-usuarios
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: 'OFF'
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - { Name: verified_email, Priority: 1 }
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - { Name: email, AttributeDataType: String, Required: true, Mutable: true }
+
+  UserPoolDominio:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub telecorp-${Stage}-${AWS::AccountId}
+      UserPoolId: !Ref UserPool
+      ManagedLoginVersion: 2
+
+  UserPoolCliente:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub telecorp-${Stage}-portal
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      AllowedOAuthFlows: [code]
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: !If
+        - HayUrlsAdicionales
+        - !Split
+          - ','
+          - !Join
+            - ','
+            - - !Ref UrlLocalPortal
+              - !Sub https://${Distribucion.DomainName}/
+              - !Join [',', !Ref UrlsPortalAdicionales]
+        - - !Ref UrlLocalPortal
+          - !Sub https://${Distribucion.DomainName}/
+      LogoutURLs: !If
+        - HayUrlsAdicionales
+        - !Split
+          - ','
+          - !Join
+            - ','
+            - - !Ref UrlLocalPortal
+              - !Sub https://${Distribucion.DomainName}/
+              - !Join [',', !Ref UrlsPortalAdicionales]
+        - - !Ref UrlLocalPortal
+          - !Sub https://${Distribucion.DomainName}/
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits: { AccessToken: minutes, IdToken: minutes, RefreshToken: days }
+
+  UserPoolBrandingManagedLogin:
+    Type: AWS::Cognito::ManagedLoginBranding
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref UserPoolCliente
+      UseCognitoProvidedValues: true
+    DependsOn: UserPoolDominio
+
+  GrupoOperadores:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: operadores
+      Description: Operadores de TeleCorp (ven todas las incidencias y cambian estados)
+      UserPoolId: !Ref UserPool
+
+  # ------------------------------------------------------------------ API Gateway
+  RolApiSqs:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: apigateway.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: enviar-reportes
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt ColaReportes.Arn
+
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub telecorp-${Stage}-api
+      StageName: !Ref Stage
+      TracingEnabled: true
+      MethodSettings:
+        - HttpMethod: '*'
+          ResourcePath: '/*'
+          ThrottlingRateLimit: !Ref ThrottlingTasa
+          ThrottlingBurstLimit: !Ref ThrottlingRafaga
+          MetricsEnabled: true
+      Cors:
+        AllowMethods: "'GET,POST,PATCH,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: !Sub "'${CorsOrigen}'"
+        MaxAge: "'600'"
+      Auth:
+        # Sin DefaultAuthorizer: cada método declara su `security` (GET /zonas queda público).
+        Authorizers:
+          CognitoAuth:
+            UserPoolArn: !GetAtt UserPool.Arn
+            Identity:
+              Header: Authorization
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${CorsOrigen}'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${CorsOrigen}'"
+      DefinitionBody:
+        openapi: 3.0.1
+        info:
+          title: !Sub telecorp-${Stage}-api
+          version: 1.0.0
+        x-amazon-apigateway-request-validators:
+          cuerpo:
+            validateRequestBody: true
+            validateRequestParameters: false
+        paths:
+          /incidencias:
+            post:
+              summary: Registrar un reporte (integración directa a SQS)
+              security:
+                - CognitoAuth: []
+              x-amazon-apigateway-request-validator: cuerpo
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/NuevoReporte'
+              responses:
+                '202':
+                  description: Aceptado y encolado
+                  headers:
+                    Access-Control-Allow-Origin:
+                      schema: { type: string }
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Aceptado'
+                '502':
+                  description: No se pudo encolar
+                  headers:
+                    Access-Control-Allow-Origin:
+                      schema: { type: string }
+              x-amazon-apigateway-integration:
+                type: aws
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${ColaReportes.QueueName}
+                credentials: !GetAtt RolApiSqs.Arn
+                passthroughBehavior: never
+                requestParameters:
+                  integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+                requestTemplates:
+                  application/json: |
+                    #set($reporte = $input.json('$'))
+                    #set($mensaje = "{""incidenciaId"": ""$context.requestId"", ""usuarioId"": ""$context.authorizer.claims.sub"", ""recibidoEn"": $context.requestTimeEpoch, ""reporte"": $reporte}")
+                    Action=SendMessage&MessageBody=$util.urlEncode($mensaje)
+                responses:
+                  '2\d{2}':
+                    statusCode: '202'
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigen}'"
+                    responseTemplates:
+                      application/json: '{"incidenciaId": "$context.requestId", "estado": "REGISTRADA"}'
+                  default:
+                    statusCode: '502'
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigen}'"
+                    responseTemplates:
+                      application/json: '{"codigo": "COLA_NO_DISPONIBLE", "mensaje": "No se pudo registrar el reporte"}'
+            get:
+              summary: Listar incidencias
+              security:
+                - CognitoAuth: []
+              parameters:
+                - { name: zonaId, in: query, schema: { type: string } }
+                - { name: estado, in: query, schema: { type: string } }
+                - { name: clase, in: query, schema: { type: string } }
+                - { name: desde, in: query, schema: { type: string } }
+                - { name: limite, in: query, schema: { type: string } }
+                - { name: cursor, in: query, schema: { type: string } }
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
+          /incidencias/{incidenciaId}:
+            get:
+              summary: Detalle de una incidencia
+              security:
+                - CognitoAuth: []
+              parameters:
+                - { name: incidenciaId, in: path, required: true, schema: { type: string } }
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
+          /incidencias/{incidenciaId}/historial:
+            get:
+              summary: Historial de estados
+              security:
+                - CognitoAuth: []
+              parameters:
+                - { name: incidenciaId, in: path, required: true, schema: { type: string } }
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
+          /incidencias/{incidenciaId}/estado:
+            patch:
+              summary: Cambiar estado (solo operadores)
+              security:
+                - CognitoAuth: []
+              parameters:
+                - { name: incidenciaId, in: path, required: true, schema: { type: string } }
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
+          /zonas:
+            get:
+              summary: Catálogo de zonas
+              security: []
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
+          /antenas:
+            get:
+              summary: Antenas y su estado actual (operador)
+              security:
+                - CognitoAuth: []
+              parameters:
+                - { name: zonaId, in: query, schema: { type: string } }
+                - { name: estado, in: query, schema: { type: string } }
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
+        components:
+          schemas:
+            Aceptado:
+              type: object
+              properties:
+                incidenciaId: { type: string }
+                estado: { type: string }
+            NuevoReporte:
+              type: object
+              required: [documento, numeroServicio, zonaId, fechaHoraEvento, tipo, descripcion]
+              properties:
+                documento: { type: string, minLength: 6, maxLength: 20 }
+                numeroServicio: { type: string, minLength: 6, maxLength: 20 }
+                telefono: { type: string, maxLength: 20 }
+                email: { type: string, maxLength: 254 }
+                zonaId: { type: string, minLength: 1, maxLength: 64 }
+                lat: { type: number }
+                lon: { type: number }
+                fechaHoraEvento: { type: string, minLength: 10, maxLength: 40 }
+                tipo:
+                  type: string
+                  enum: [SIN_INTERNET, SIN_LLAMADAS, SIN_SMS, LENTITUD, INTERMITENCIA, OTRO]
+                descripcion: { type: string, minLength: 1, maxLength: 1000 }
+
+  WafApi:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub telecorp-${Stage}-api
+      Scope: REGIONAL
+      DefaultAction: { Allow: {} }
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub telecorp-${Stage}-api
+      Rules:
+        - Name: limite-de-tasa-por-ip
+          Priority: 0
+          Action: { Block: {} }
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref LimiteTasaWaf
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub telecorp-${Stage}-limite-tasa
+
+  WafAsociacionApi:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      WebACLArn: !GetAtt WafApi.Arn
+      ResourceArn: !Sub arn:aws:apigateway:${AWS::Region}::/restapis/${Api}/stages/${Api.Stage}
+
+  # ------------------------------------------------------------------ Lambdas del núcleo
+  FuncionRegistrarReporte:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-registrar-reporte
+      Description: Consume la cola de reportes, registra incidencias y mantiene la ventana de 24 h
+      CodeUri: src/registrar_reporte/
+      Handler: app.lambda_handler
+      Timeout: 20
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-registrar-reporte
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:ConditionCheckItem]
+              Resource:
+                - !GetAtt TablaIncidencias.Arn
+                - !GetAtt TablaHistorial.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:Query]
+              Resource: !GetAtt TablaZonaVentana.Arn
+      Events:
+        Reportes:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ColaReportes.Arn
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 2
+            FunctionResponseTypes: [ReportBatchItemFailures]
+            ScalingConfig:
+              MaximumConcurrency: 10
+
+  FuncionApiIncidencias:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-api-incidencias
+      Description: Consultas y cambio de estado de incidencias; catálogo de zonas y antenas
+      CodeUri: src/api_incidencias/
+      Handler: app.lambda_handler
+      Timeout: 15
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-api-incidencias
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:Scan]
+              Resource:
+                - !GetAtt TablaIncidencias.Arn
+                - !Sub ${TablaIncidencias.Arn}/index/*
+                - !GetAtt TablaZonas.Arn
+                - !GetAtt TablaAntenas.Arn
+                - !Sub ${TablaAntenas.Arn}/index/*
+            - Effect: Allow
+              Action: [dynamodb:Query]
+              Resource: !GetAtt TablaHistorial.Arn
+            - Effect: Allow
+              Action: [dynamodb:UpdateItem, dynamodb:PutItem, dynamodb:ConditionCheckItem]
+              Resource:
+                - !GetAtt TablaIncidencias.Arn
+                - !GetAtt TablaHistorial.Arn
+
+  PermisoApiIncidencias:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref FuncionApiIncidencias
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/*
+
+  # ------------------------------------------------------------------ Telemetría
+  ColaTelemetriaDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub telecorp-${Stage}-telemetria-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  StreamTelemetria:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub telecorp-${Stage}-telemetria
+      RetentionPeriodHours: 24
+      StreamModeDetails: { StreamMode: ON_DEMAND }
+      StreamEncryption:
+        EncryptionType: KMS
+        KeyId: alias/aws/kinesis
+
+  RolIotKinesis:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: iot.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref 'AWS::AccountId' }
+      Policies:
+        - PolicyName: escribir-telemetria
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: kinesis:PutRecord
+                Resource: !GetAtt StreamTelemetria.Arn
+
+  ReglaIotTelemetria:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub telecorp_${Stage}_telemetria
+      TopicRulePayload:
+        Description: Telemetría de antenas hacia Kinesis
+        RuleDisabled: false
+        AwsIotSqlVersion: '2016-03-23'
+        Sql: SELECT * FROM 'telecorp/antenas/+/trafico'
+        Actions:
+          - Kinesis:
+              StreamName: !Ref StreamTelemetria
+              PartitionKey: ${antenaId}
+              RoleArn: !GetAtt RolIotKinesis.Arn
+
+  FuncionEvaluarAntena:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-evaluar-antena
+      Description: Clasifica la telemetría, guarda métricas y actualiza antenas cuando cambia el estado
+      CodeUri: src/evaluar_antena/
+      Handler: app.lambda_handler
+      Timeout: 60
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-evaluar-antena
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:PutItem]
+              Resource: !GetAtt TablaMetricas.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt TablaAntenas.Arn
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt ColaTelemetriaDlq.Arn
+      Events:
+        Telemetria:
+          Type: Kinesis
+          Properties:
+            Stream: !GetAtt StreamTelemetria.Arn
+            StartingPosition: LATEST
+            BatchSize: 100
+            MaximumBatchingWindowInSeconds: 2
+            BisectBatchOnFunctionError: true
+            MaximumRetryAttempts: 3
+            MaximumRecordAgeInSeconds: 3600
+            FunctionResponseTypes: [ReportBatchItemFailures]
+            DestinationConfig:
+              OnFailure:
+                Type: SQS
+                Destination: !GetAtt ColaTelemetriaDlq.Arn
+
+  # ------------------------------------------------------------------ Hosting del portal
+  BucketPortal:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub telecorp-${Stage}-portal-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  OacPortal:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub telecorp-${Stage}-portal-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  Distribucion:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub Portal Red TeleCorp (${Stage})
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: portal-s3
+            DomainName: !GetAtt BucketPortal.RegionalDomainName
+            OriginAccessControlId: !GetAtt OacPortal.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: portal-s3
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy
+        # Reescritura de SPA: rutas del lado del cliente devuelven index.html
+        CustomErrorResponses:
+          - { ErrorCode: 403, ResponseCode: 200, ResponsePagePath: /index.html, ErrorCachingMinTTL: 0 }
+          - { ErrorCode: 404, ResponseCode: 200, ResponsePagePath: /index.html, ErrorCachingMinTTL: 0 }
+
+  PoliticaBucketPortal:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketPortal
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SoloCloudFront
+            Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub ${BucketPortal.Arn}/*
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribucion}
+          - Sid: SoloTLS
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt BucketPortal.Arn, !Sub '${BucketPortal.Arn}/*']
+            Condition:
+              Bool: { 'aws:SecureTransport': 'false' }
+
+  # ------------------------------------------------------------------ Alarmas
+  TemaAlarmas:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub telecorp-${Stage}-alarmas
+
+  AlarmaDlqReportes:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-dlq-reportes
+      AlarmDescription: Hay reportes que no se pudieron procesar (DLQ de reportes)
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt ColaReportesDlq.QueueName }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref TemaAlarmas]
+
+  AlarmaDlqTelemetria:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-dlq-telemetria
+      AlarmDescription: Hay lotes de telemetría descartados (DLQ de evaluar-antena)
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt ColaTelemetriaDlq.QueueName }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref TemaAlarmas]
+
+  AlarmaDlqPipes:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-dlq-pipes
+      AlarmDescription: Hay registros de stream que los Pipes no pudieron entregar al bus
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt PipesDlq.QueueName }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref TemaAlarmas]
+
+  AlarmaErroresRegistrarReporte:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-errores-registrar-reporte
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref FuncionRegistrarReporte }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref TemaAlarmas]
+
+  AlarmaErroresEvaluarAntena:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-errores-evaluar-antena
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref FuncionEvaluarAntena }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref TemaAlarmas]
+
+  AlarmaErroresApiIncidencias:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-errores-api-incidencias
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref FuncionApiIncidencias }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref TemaAlarmas]
+
+  AlarmaErroresPipeEnriquecer:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-errores-pipe-enriquecer
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref PipeEnriquecer }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref TemaAlarmas]
+
+  AlarmaEdadIteradorTelemetria:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-edad-iterador-telemetria
+      AlarmDescription: evaluar-antena se está atrasando respecto a la telemetría (más de 1 minuto)
+      Namespace: AWS/Kinesis
+      MetricName: GetRecords.IteratorAgeMilliseconds
+      Dimensions: [{ Name: StreamName, Value: !Ref StreamTelemetria }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 60000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref TemaAlarmas]
+
+  # ------------------------------------------------------------------ Stacks anidados
+  StackOrquestacion:
+    Type: AWS::Serverless::Application
+    DependsOn:
+      - BusEventos
+      - TablaIncidencias
+      - TablaHistorial
+      - TablaZonaVentana
+      - TablaZonas
+      - TablaAntenas
+      - TablaMetricas
+    Properties:
+      Location: stacks/orquestacion.yaml
+      Parameters:
+        Stage: !Ref Stage
+        ComunLayerArn: !Ref ComunLayer
+
+  StackPuente:
+    Type: AWS::Serverless::Application
+    DependsOn:
+      - BusEventos
+      - TablaIncidencias
+      - TablaHistorial
+      - TablaZonaVentana
+      - TablaZonas
+      - TablaAntenas
+      - TablaMetricas
+    Properties:
+      Location: stacks/puente.yaml
+      Parameters:
+        Stage: !Ref Stage
+        ComunLayerArn: !Ref ComunLayer
+
+  StackIa:
+    Type: AWS::Serverless::Application
+    DependsOn:
+      - BusEventos
+      - TablaIncidencias
+      - TablaHistorial
+      - TablaZonaVentana
+      - TablaZonas
+      - TablaAntenas
+      - TablaMetricas
+    Properties:
+      Location: stacks/ia.yaml
+      Parameters:
+        Stage: !Ref Stage
+        ComunLayerArn: !Ref ComunLayer
+
+Outputs:
+  ApiUrl:
+    Description: URL base de la API REST
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/${Stage}
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolCliente
+  CognitoDomain:
+    Description: Dominio del managed login de Cognito
+    Value: !Sub ${UserPoolDominio}.auth.${AWS::Region}.amazoncognito.com
+  PortalBucket:
+    Value: !Ref BucketPortal
+  CloudFrontDomain:
+    Value: !GetAtt Distribucion.DomainName
+  CloudFrontDistributionId:
+    Value: !Ref Distribucion
+  BusEventosNombre:
+    Description: Nombre del bus de eventos
+    Value: !Ref BusEventos
+  ColaReportesUrl:
+    Value: !Ref ColaReportes
+  StreamTelemetriaNombre:
+    Value: !Ref StreamTelemetria
