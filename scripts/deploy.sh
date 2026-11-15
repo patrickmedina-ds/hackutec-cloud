@@ -8,7 +8,6 @@
 #   STAGE       stage de despliegue (por defecto: dev)
 #   AWS_REGION  región de AWS (por defecto: us-east-1)
 #   PYTHON      intérprete de Python 3.12 (por defecto: python3)
-#   SES_REMITENTE   correo remitente verificado en SES (p. ej. avisos@tu-dominio.com)
 #   SWA_DIR     carpeta de la página de estado (por defecto: azure/status-page)
 
 set -euo pipefail
@@ -57,7 +56,8 @@ for herramienta in aws sam terraform az node func; do
 done
 command -v "$PYTHON" >/dev/null 2>&1 || morir "No se encontró el intérprete '$PYTHON'."
 info "Stage: ${STAGE} · Región AWS: ${REGION}"
-CUENTA_AWS="$(aws sts get-caller-identity --query Account --output text)"
+CUENTA_AWS="$(aws sts get-caller-identity --query Account --output text)" \
+  || morir "Las credenciales de AWS no son válidas o expiraron (Learner Lab: copia las nuevas en ~/.aws/credentials)."
 info "Cuenta AWS: ${CUENTA_AWS}"
 
 # ---------------------------------------------------------------------------
@@ -69,22 +69,25 @@ paso "1/6" "AWS: sam build y sam deploy (stack ${STACK})"
     --stack-name "$STACK" \
     --region "$REGION" \
     --resolve-s3 \
-    --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+    --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
     --no-confirm-changeset \
     --no-fail-on-empty-changeset \
     --parameter-overrides "Stage=${STAGE}"
 )
 
 # ---------------------------------------------------------------------------
-paso "2/6" "Federación saliente de IAM y Azure: terraform apply"
-# El puente obtiene su JWT para Entra ID con sts:GetWebIdentityToken (docs/federacion.md).
-aws iam enable-outbound-web-identity-federation >/dev/null 2>&1 || true
-EMISOR_AWS="$(aws iam get-outbound-web-identity-federation-info --query IssuerUrl --output text)"
-info "Emisor OIDC de la cuenta: ${EMISOR_AWS}"
+paso "2/6" "Identidad de Cognito para Azure y terraform apply"
+# AWS se autentica en Entra ID con un JWT de Cognito Identity Pool (docs/federacion.md).
+# El mismo login devuelve siempre el mismo IdentityId, así que este paso es idempotente.
+POOL_ID="$(aws ssm get-parameter --name "/telecorp/${STAGE}/aws/identity-pool-id" --region "$REGION" \
+  --query Parameter.Value --output text)"
+IDENTIDAD_ID="$(aws cognito-identity get-open-id-token-for-developer-identity --region "$REGION" \
+  --identity-pool-id "$POOL_ID" --logins "telecorp.aws=telecorp-${STAGE}" --query IdentityId --output text)"
+info "Identity Pool: ${POOL_ID} · IdentityId: ${IDENTIDAD_ID}"
 
 # Azure va en dos pasadas: la suscripción de Event Grid exige que la función ya esté
 # publicada, así que se crea en el paso 6.
-VARS_AZ=(-var "stage=${STAGE}" -var "aws_account_id=${CUENTA_AWS}" -var "aws_oidc_issuer_url=${EMISOR_AWS}")
+VARS_AZ=(-var "stage=${STAGE}" -var "aws_cognito_identity_pool_id=${POOL_ID}" -var "aws_cognito_identity_id=${IDENTIDAD_ID}")
 terraform -chdir="${RAIZ}/azure/terraform" init -input=false -upgrade >/dev/null
 terraform -chdir="${RAIZ}/azure/terraform" apply -input=false -auto-approve "${VARS_AZ[@]}" \
   -var "crear_suscripcion_eventgrid=false"
@@ -96,16 +99,13 @@ AZ_DIR="${RAIZ}/azure/terraform"
 AZ_TENANT="$(tf_salida "$AZ_DIR" federacion_tenant_id)"
 AZ_CLIENTE="$(tf_salida "$AZ_DIR" federacion_client_id)"
 AZ_EVENTGRID="$(tf_salida "$AZ_DIR" federacion_eventgrid_endpoint)"
+AZ_OPENAI="$(tf_salida "$AZ_DIR" openai_endpoint)"
+AZ_OPENAI_DESPLIEGUE="$(tf_salida "$AZ_DIR" openai_deployment)"
 ssm_guardar "azure/tenant-id"          "$AZ_TENANT"
 ssm_guardar "azure/client-id"          "$AZ_CLIENTE"
 ssm_guardar "azure/eventgrid-endpoint" "$AZ_EVENTGRID"
-if [[ -n "${SES_REMITENTE:-}" ]]; then
-  ssm_guardar "aws/ses-remitente" "$SES_REMITENTE"
-  aws sesv2 create-email-identity --email-identity "$SES_REMITENTE" --region "$REGION" >/dev/null 2>&1 \
-    && info "SES envió un correo de verificación a ${SES_REMITENTE}." || true
-else
-  info "SES_REMITENTE no definido: los correos de AWS fallarán y Azure los reenviará como respaldo."
-fi
+ssm_guardar "azure/openai-endpoint"    "$AZ_OPENAI"
+ssm_guardar "azure/openai-deployment"  "$AZ_OPENAI_DESPLIEGUE"
 
 # ---------------------------------------------------------------------------
 paso "4/6" "Sembrando zonas y antenas en DynamoDB"

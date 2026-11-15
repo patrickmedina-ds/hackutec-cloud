@@ -66,12 +66,13 @@ fi
 
 # ---------------------------------------------------------------------------
 # Las variables obligatorias de federacion.tf también se piden al destruir.
-CUENTA_AWS="$(aws sts get-caller-identity --query Account --output text)"
-EMISOR_AWS="$(aws iam get-outbound-web-identity-federation-info --query IssuerUrl --output text 2>/dev/null || echo "https://pendiente.invalid")"
+POOL_ID="$(aws ssm get-parameter --name "/telecorp/${STAGE}/aws/identity-pool-id" --region "$REGION" \
+  --query Parameter.Value --output text 2>/dev/null || echo "pendiente")"
+IDENTIDAD_ID="pendiente"
 
 paso "3/4" "Azure: terraform destroy (Functions, Static Web App, Cosmos DB, Event Grid, etc.)"
 terraform -chdir="${RAIZ}/azure/terraform" destroy -input=false -auto-approve \
-  -var "stage=${STAGE}" -var "aws_account_id=${CUENTA_AWS}" -var "aws_oidc_issuer_url=${EMISOR_AWS}"
+  -var "stage=${STAGE}" -var "aws_cognito_identity_pool_id=${POOL_ID}" -var "aws_cognito_identity_id=${IDENTIDAD_ID}"
 
 # ---------------------------------------------------------------------------
 paso "4/4" "AWS: sam delete del stack ${STACK} (tablas, bus, colas, API, Step Functions, Lambdas)"
