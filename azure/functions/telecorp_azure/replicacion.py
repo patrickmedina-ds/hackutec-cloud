@@ -11,7 +11,8 @@ Interfaz esperada del repositorio:
     modificar_zona(zona_id, fn) -> dict     # fn(doc) -> doc; con reintento por etag
 
 Interfaz del notificador:
-    enviar(canal, destino, asunto, mensaje) -> None   # lanza excepción si falla
+    enviar(canal, destino, asunto, mensaje, incidencia_id=None, estado=None) -> None
+    sms_habilitado -> bool                            # hay número remitente configurado
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ LIMITE_SMS = 160
 
 TIPO_INCIDENCIA = "Incidencia.CambioEstado"
 TIPO_ANTENA = "Antena.CambioEstado"
-TIPO_NOTIFICACION = "Notificacion.Fallida"
+TIPO_NOTIFICACION = "Notificacion.Solicitada"
 
 
 class Repositorio(Protocol):
@@ -40,7 +41,10 @@ class Repositorio(Protocol):
 
 
 class Notificador(Protocol):
-    def enviar(self, canal: str, destino: str, asunto: str | None, mensaje: str) -> None: ...
+    sms_habilitado: bool
+
+    def enviar(self, canal: str, destino: str, asunto: str | None, mensaje: str,
+               incidencia_id: str | None = None, estado: str | None = None) -> None: ...
 
 
 def _ahora() -> str:
@@ -186,17 +190,25 @@ def recortar_sms(mensaje: str) -> str:
     return mensaje if len(mensaje) <= LIMITE_SMS else mensaje[: LIMITE_SMS - 1] + "…"
 
 
-def manejar_notificacion_fallida(data: dict, ce_id: str, notificador: Notificador) -> dict:
+def manejar_notificacion_solicitada(data: dict, ce_id: str, notificador: Notificador) -> dict:
     canal = data["canal"]
+    inc = data.get("incidenciaId")
     if canal == "SMS":
-        notificador.enviar("SMS", data["destino"], None, recortar_sms(data["mensaje"]))
+        if not getattr(notificador, "sms_habilitado", False):
+            log.warning("SMS omitido: no hay número remitente de ACS configurado "
+                        "(incidencia=%s destino=%s); se da por resuelto",
+                        inc, enmascarar(data["destino"]))
+            return {"resultado": "sms_omitido_sin_remitente", "canal": canal}
+        notificador.enviar("SMS", data["destino"], None, recortar_sms(data["mensaje"]),
+                           incidencia_id=inc, estado=data.get("estado"))
     elif canal == "EMAIL":
         asunto = data.get("asunto") or "Red TeleCorp: actualización de tu incidencia"
-        notificador.enviar("EMAIL", data["destino"], asunto, data["mensaje"])
+        notificador.enviar("EMAIL", data["destino"], asunto, data["mensaje"],
+                           incidencia_id=inc, estado=data.get("estado"))
     else:
         raise ValueError(f"Canal no soportado: {canal}")
-    log.info("Aviso de respaldo enviado: incidencia=%s canal=%s destino=%s",
-             data.get("incidenciaId"), canal, enmascarar(data["destino"]))
+    log.info("Aviso enviado por ACS: incidencia=%s canal=%s destino=%s",
+             inc, canal, enmascarar(data["destino"]))
     return {"resultado": "aviso_enviado", "canal": canal}
 
 
@@ -227,7 +239,7 @@ def procesar_evento(evento: dict, repo: Repositorio, notificador: Notificador) -
             return manejar_cambio_incidencia(data, ce_id, repo)
         if tipo == TIPO_ANTENA:
             return manejar_cambio_antena(data, ce_id, repo)
-        return manejar_notificacion_fallida(data, ce_id, notificador)
+        return manejar_notificacion_solicitada(data, ce_id, notificador)
     except Exception:
         repo.liberar_evento(ce_id)
         raise
