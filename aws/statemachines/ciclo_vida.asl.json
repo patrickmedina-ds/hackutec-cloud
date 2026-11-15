@@ -1,0 +1,374 @@
+{
+  "Comment": "telecorp ciclo-vida (Express). Disparada por Incidencia.CambioEstado de reportes INDIVIDUAL: REGISTRADA -> clasificación IA + prioridad + EN_REVISION; EN_REVISION/ATENDIDA/SOLUCIONADA -> aviso por SMS y correo. Solo transiciona desde REGISTRADA, así un CambioEstado nunca genera otra transición igual.",
+  "QueryLanguage": "JSONata",
+  "StartAt": "Inicio",
+  "States": {
+    "Inicio": {
+      "Type": "Pass",
+      "Assign": {
+        "evento": "{% $states.input.detail %}",
+        "incidenciaId": "{% $states.input.detail.incidenciaId %}"
+      },
+      "Next": "ElegirFlujo"
+    },
+    "ElegirFlujo": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $evento.snapshot.clase = 'INDIVIDUAL' and $evento.estadoNuevo = 'REGISTRADA' %}",
+          "Next": "LeerIncidenciaClasificar"
+        },
+        {
+          "Condition": "{% $evento.snapshot.clase = 'INDIVIDUAL' and $evento.estadoNuevo in ['EN_REVISION', 'ATENDIDA', 'SOLUCIONADA'] %}",
+          "Next": "LeerIncidenciaNotificar"
+        }
+      ],
+      "Default": "SinAccion"
+    },
+
+    "LeerIncidenciaClasificar": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Arguments": {
+        "TableName": "${TablaIncidencias}",
+        "Key": { "incidenciaId": { "S": "{% $incidenciaId %}" } },
+        "ProjectionExpression": "incidenciaId, zonaId, tipo, descripcion",
+        "ConsistentRead": true
+      },
+      "Assign": { "incidencia": "{% $exists($states.result.Item) ? $states.result.Item : null %}" },
+      "Retry": [
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+      ],
+      "Next": "ExisteIncidenciaClasificar"
+    },
+    "ExisteIncidenciaClasificar": {
+      "Type": "Choice",
+      "Choices": [{ "Condition": "{% $incidencia != null %}", "Next": "LeerZonaClasificar" }],
+      "Default": "SinAccion"
+    },
+    "LeerZonaClasificar": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Arguments": {
+        "TableName": "${TablaZonas}",
+        "Key": { "zonaId": { "S": "{% $incidencia.zonaId.S ? $incidencia.zonaId.S : 'SIN_ZONA' %}" } },
+        "ProjectionExpression": "zonaId, tipoZona"
+      },
+      "Assign": {
+        "tipoZona": "{% $states.result.Item.tipoZona.S ? $states.result.Item.tipoZona.S : 'RESIDENCIAL' %}"
+      },
+      "Retry": [
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+      ],
+      "Next": "ClasificarIA"
+    },
+    "ClasificarIA": {
+      "Type": "Task",
+      "Comment": "clasificar-ia nunca debería fallar (tiene respaldo por reglas); el Catch es una segunda red.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "${FuncionIA}",
+        "Payload": {
+          "accion": "CLASIFICAR",
+          "incidenciaId": "{% $incidenciaId %}",
+          "tipo": "{% $incidencia.tipo.S ? $incidencia.tipo.S : 'OTRO' %}",
+          "descripcion": "{% $incidencia.descripcion.S ? $incidencia.descripcion.S : '' %}",
+          "zonaId": "{% $incidencia.zonaId.S ? $incidencia.zonaId.S : '' %}",
+          "tipoZona": "{% $tipoZona %}"
+        }
+      },
+      "Assign": { "ia": "{% $states.result.Payload %}" },
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "ia": "{% {'tipo': $incidencia.tipo.S ? $incidencia.tipo.S : 'OTRO', 'severidad': 'MEDIA', 'resumen': 'Clasificación automática no disponible', 'confianza': 0} %}"
+          },
+          "Next": "AplicarClasificacion"
+        }
+      ],
+      "Next": "AplicarClasificacion"
+    },
+    "AplicarClasificacion": {
+      "Type": "Task",
+      "Comment": "Lambda auxiliar: telecorp_comun.prioridad (1 afectado) + transicionar() a EN_REVISION.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "${FuncionClasificacion}",
+        "Payload": {
+          "incidenciaId": "{% $incidenciaId %}",
+          "tipoZona": "{% $tipoZona %}",
+          "ia": "{% $ia %}"
+        }
+      },
+      "Output": "{% $states.result.Payload %}",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+        },
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2 }
+      ],
+      "End": true
+    },
+
+    "LeerIncidenciaNotificar": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Arguments": {
+        "TableName": "${TablaIncidencias}",
+        "Key": { "incidenciaId": { "S": "{% $incidenciaId %}" } },
+        "ProjectionExpression": "incidenciaId, zonaId, telefono, email",
+        "ConsistentRead": true
+      },
+      "Assign": {
+        "incidencia": "{% $exists($states.result.Item) ? $states.result.Item : null %}",
+        "telefono": "{% $states.result.Item.telefono.S ? $states.result.Item.telefono.S : '' %}",
+        "email": "{% $states.result.Item.email.S ? $states.result.Item.email.S : '' %}"
+      },
+      "Retry": [
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+      ],
+      "Next": "HayDestinos"
+    },
+    "HayDestinos": {
+      "Type": "Choice",
+      "Choices": [
+        { "Condition": "{% $incidencia != null and ($telefono != '' or $email != '') %}", "Next": "LeerZonaNotificar" }
+      ],
+      "Default": "SinAccion"
+    },
+    "LeerZonaNotificar": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Arguments": {
+        "TableName": "${TablaZonas}",
+        "Key": { "zonaId": { "S": "{% $incidencia.zonaId.S ? $incidencia.zonaId.S : 'SIN_ZONA' %}" } },
+        "ProjectionExpression": "zonaId, nombre"
+      },
+      "Assign": {
+        "zonaNombre": "{% $states.result.Item.nombre.S ? $states.result.Item.nombre.S : ($incidencia.zonaId.S ? $incidencia.zonaId.S : 'tu zona') %}"
+      },
+      "Retry": [
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+      ],
+      "Next": "RedactarAviso"
+    },
+    "RedactarAviso": {
+      "Type": "Task",
+      "Comment": "Un solo aviso con canal SMS (<=160 caracteres) que sirve para ambos canales.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "${FuncionIA}",
+        "Payload": {
+          "accion": "REDACTAR_AVISO",
+          "estado": "{% $evento.estadoNuevo %}",
+          "zonaNombre": "{% $zonaNombre %}",
+          "canal": "SMS"
+        }
+      },
+      "Assign": {
+        "asunto": "{% $states.result.Payload.asunto ? $states.result.Payload.asunto : 'Red TeleCorp: actualización de tu reporte' %}",
+        "mensaje": "{% $states.result.Payload.mensaje ? $states.result.Payload.mensaje : $lookup({'EN_REVISION': 'Recibimos tu reporte y lo estamos evaluando.', 'ATENDIDA': 'Identificamos una incidencia en tu zona y un equipo la está atendiendo.', 'SOLUCIONADA': 'El servicio fue restablecido.'}, $evento.estadoNuevo) %}"
+      },
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 1, "MaxAttempts": 2, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Comment": "Plantillas fijas de contratos/eventos.md si la IA no responde.",
+          "Assign": {
+            "asunto": "Red TeleCorp: actualización de tu reporte",
+            "mensaje": "{% $lookup({'EN_REVISION': 'Recibimos tu reporte y lo estamos evaluando.', 'ATENDIDA': 'Identificamos una incidencia en tu zona y un equipo la está atendiendo.', 'SOLUCIONADA': 'El servicio fue restablecido.'}, $evento.estadoNuevo) %}"
+          },
+          "Next": "Notificar"
+        }
+      ],
+      "Next": "Notificar"
+    },
+    "Notificar": {
+      "Type": "Parallel",
+      "Comment": "Cada rama captura su error, publica Notificacion.Fallida y termina bien: un canal caído no falla la ejecución.",
+      "Branches": [
+        {
+          "StartAt": "TieneTelefono",
+          "States": {
+            "TieneTelefono": {
+              "Type": "Choice",
+              "Choices": [{ "Condition": "{% $telefono != '' %}", "Next": "EnviarSMS" }],
+              "Default": "SinSMS"
+            },
+            "EnviarSMS": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Arguments": {
+                "PhoneNumber": "{% $telefono %}",
+                "Message": "{% $substring($mensaje, 0, 160) %}",
+                "MessageAttributes": {
+                  "AWS.SNS.SMS.SMSType": { "DataType": "String", "StringValue": "Transactional" },
+                  "AWS.SNS.SMS.SenderID": { "DataType": "String", "StringValue": "TeleCorp" }
+                }
+              },
+              "Output": "{% {'canal': 'SMS', 'enviado': true} %}",
+              "Retry": [
+                { "ErrorEquals": ["SNS.ThrottledException", "SNS.InternalErrorException"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2, "JitterStrategy": "FULL" }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Assign": { "errorEnvio": "{% $states.errorOutput.Error %}" },
+                  "Next": "PublicarFalloSMS"
+                }
+              ],
+              "End": true
+            },
+            "PublicarFalloSMS": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Arguments": {
+                "Entries": [
+                  {
+                    "EventBusName": "${BusEventos}",
+                    "Source": "telecorp.notificaciones",
+                    "DetailType": "Notificacion.Fallida",
+                    "Detail": {
+                      "incidenciaId": "{% $incidenciaId %}",
+                      "estado": "{% $evento.estadoNuevo %}",
+                      "canal": "SMS",
+                      "destino": "{% $telefono %}",
+                      "asunto": "{% $asunto %}",
+                      "mensaje": "{% $substring($mensaje, 0, 160) %}",
+                      "error": "{% $errorEnvio %}"
+                    }
+                  }
+                ]
+              },
+              "Output": "{% {'canal': 'SMS', 'enviado': false, 'error': $errorEnvio} %}",
+              "Retry": [
+                { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+              ],
+              "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "SinSMS" }],
+              "End": true
+            },
+            "SinSMS": {
+              "Type": "Pass",
+              "Output": "{% {'canal': 'SMS', 'enviado': false} %}",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "TieneEmail",
+          "States": {
+            "TieneEmail": {
+              "Type": "Choice",
+              "Choices": [{ "Condition": "{% $email != '' %}", "Next": "LeerRemitente" }],
+              "Default": "SinCorreo"
+            },
+            "LeerRemitente": {
+              "Type": "Task",
+              "Comment": "Remitente verificado en SES, en SSM para no romper el despliegue si aún no existe.",
+              "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+              "Arguments": { "Name": "${ParametroRemitente}" },
+              "Assign": { "remitente": "{% $states.result.Parameter.Value %}" },
+              "Retry": [
+                { "ErrorEquals": ["Ssm.ThrottlingException", "Ssm.InternalServerErrorException"], "IntervalSeconds": 1, "MaxAttempts": 2, "BackoffRate": 2 }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Assign": { "errorEnvio": "{% $states.errorOutput.Error %}" },
+                  "Next": "PublicarFalloCorreo"
+                }
+              ],
+              "Next": "EnviarCorreo"
+            },
+            "EnviarCorreo": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:sesv2:sendEmail",
+              "Arguments": {
+                "FromEmailAddress": "{% $remitente %}",
+                "Destination": { "ToAddresses": ["{% $email %}"] },
+                "Content": {
+                  "Simple": {
+                    "Subject": { "Data": "{% $asunto %}", "Charset": "UTF-8" },
+                    "Body": {
+                      "Text": {
+                        "Data": "{% $mensaje & ' Código de reporte: ' & $incidenciaId & '. Red TeleCorp.' %}",
+                        "Charset": "UTF-8"
+                      }
+                    }
+                  }
+                }
+              },
+              "Output": "{% {'canal': 'EMAIL', 'enviado': true} %}",
+              "Retry": [
+                { "ErrorEquals": ["SesV2.TooManyRequestsException", "SesV2.SesV2Exception"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2, "JitterStrategy": "FULL" }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Assign": { "errorEnvio": "{% $states.errorOutput.Error %}" },
+                  "Next": "PublicarFalloCorreo"
+                }
+              ],
+              "End": true
+            },
+            "PublicarFalloCorreo": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Arguments": {
+                "Entries": [
+                  {
+                    "EventBusName": "${BusEventos}",
+                    "Source": "telecorp.notificaciones",
+                    "DetailType": "Notificacion.Fallida",
+                    "Detail": {
+                      "incidenciaId": "{% $incidenciaId %}",
+                      "estado": "{% $evento.estadoNuevo %}",
+                      "canal": "EMAIL",
+                      "destino": "{% $email %}",
+                      "asunto": "{% $asunto %}",
+                      "mensaje": "{% $mensaje %}",
+                      "error": "{% $errorEnvio %}"
+                    }
+                  }
+                ]
+              },
+              "Output": "{% {'canal': 'EMAIL', 'enviado': false, 'error': $errorEnvio} %}",
+              "Retry": [
+                { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+              ],
+              "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "SinCorreo" }],
+              "End": true
+            },
+            "SinCorreo": {
+              "Type": "Pass",
+              "Output": "{% {'canal': 'EMAIL', 'enviado': false} %}",
+              "End": true
+            }
+          }
+        }
+      ],
+      "Output": "{% {'incidenciaId': $incidenciaId, 'estado': $evento.estadoNuevo, 'envios': $states.result} %}",
+      "End": true
+    },
+
+    "SinAccion": {
+      "Type": "Succeed",
+      "Output": "{% {'incidenciaId': $incidenciaId, 'accion': 'NINGUNA'} %}"
+    }
+  }
+}

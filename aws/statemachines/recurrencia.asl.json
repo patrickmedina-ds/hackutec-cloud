@@ -1,0 +1,84 @@
+{
+  "Comment": "telecorp recurrencia (Standard). EventBridge Scheduler diario 02:00 America/Lima. Recorre las antenas (Scan paginado) y, por cada una, cuenta episodios de degradación en 7 días; con 3 o más crea REC-<antenaId>-<semana ISO> (idempotente).",
+  "QueryLanguage": "JSONata",
+  "StartAt": "Inicio",
+  "States": {
+    "Inicio": {
+      "Type": "Pass",
+      "Assign": {
+        "fechaReferencia": "{% $exists($states.input.fechaReferencia) and $states.input.fechaReferencia != '' and $substring($states.input.fechaReferencia, 0, 1) != '<' ? $states.input.fechaReferencia : $states.context.Execution.StartTime %}",
+        "ultimaClave": null,
+        "creadas": "{% [] %}",
+        "evaluadas": 0,
+        "fallidas": 0
+      },
+      "Next": "EscanearAntenas"
+    },
+    "EscanearAntenas": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:scan",
+      "Arguments": "{% $merge([{'TableName': '${TablaAntenas}', 'ProjectionExpression': 'antenaId, zonaId', 'Limit': 200}, $ultimaClave != null ? {'ExclusiveStartKey': $ultimaClave} : {}]) %}",
+      "Assign": {
+        "antenasPagina": "{% [$states.result.Items.{'antenaId': antenaId.S, 'zonaId': zonaId.S ? zonaId.S : ''}] %}",
+        "ultimaClave": "{% $exists($states.result.LastEvaluatedKey) ? $states.result.LastEvaluatedKey : null %}"
+      },
+      "Retry": [
+        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+      ],
+      "Next": "EvaluarAntenas"
+    },
+    "EvaluarAntenas": {
+      "Type": "Map",
+      "Items": "{% $antenasPagina %}",
+      "ItemSelector": "{% {'antenaId': $states.context.Map.Item.Value.antenaId, 'zonaId': $states.context.Map.Item.Value.zonaId, 'fechaReferencia': $fechaReferencia} %}",
+      "MaxConcurrency": 5,
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "EvaluarAntena",
+        "States": {
+          "EvaluarAntena": {
+            "Type": "Task",
+            "Comment": "Lambda auxiliar: cuenta episodios en metricas-antena y crea la incidencia de recurrencia con registrar_inicial()/transicionar().",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Arguments": {
+              "FunctionName": "${FuncionRecurrencia}",
+              "Payload": "{% $states.input %}"
+            },
+            "Output": "{% {'antenaId': $states.result.Payload.antenaId, 'episodios': $states.result.Payload.episodios, 'creada': $states.result.Payload.creada = true, 'incidenciaId': $exists($states.result.Payload.incidenciaId) ? $states.result.Payload.incidenciaId : null} %}",
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+              },
+              { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2 }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Output": "{% {'antenaId': $states.input.antenaId, 'creada': false, 'error': $states.errorOutput.Error} %}",
+                "Next": "AntenaFallida"
+              }
+            ],
+            "End": true
+          },
+          "AntenaFallida": { "Type": "Pass", "End": true }
+        }
+      },
+      "Assign": {
+        "creadas": "{% $append($creadas, [$states.result[creada = true].incidenciaId]) %}",
+        "evaluadas": "{% $evaluadas + $count($states.result) %}",
+        "fallidas": "{% $fallidas + $count($states.result[$exists(error)]) %}"
+      },
+      "Next": "HayMasAntenas"
+    },
+    "HayMasAntenas": {
+      "Type": "Choice",
+      "Choices": [{ "Condition": "{% $ultimaClave != null %}", "Next": "EscanearAntenas" }],
+      "Default": "Fin"
+    },
+    "Fin": {
+      "Type": "Succeed",
+      "Output": "{% {'fechaReferencia': $fechaReferencia, 'antenasEvaluadas': $evaluadas, 'fallidas': $fallidas, 'incidenciasCreadas': $creadas} %}"
+    }
+  }
+}
