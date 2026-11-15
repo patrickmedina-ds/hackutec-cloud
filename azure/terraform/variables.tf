@@ -42,6 +42,30 @@ variable "cors_origenes_extra" {
   default     = []
 }
 
+variable "openai_location" {
+  description = "Región de la cuenta de Azure OpenAI (donde hay cuota de gpt-4.1-mini GlobalStandard)."
+  type        = string
+  default     = "westus"
+}
+
+variable "openai_modelo" {
+  description = "Modelo de Azure OpenAI (también es el nombre del despliegue)."
+  type        = string
+  default     = "gpt-4.1-mini"
+}
+
+variable "openai_modelo_version" {
+  description = "Versión del modelo."
+  type        = string
+  default     = "2025-04-14"
+}
+
+variable "openai_capacidad" {
+  description = "Capacidad del despliegue GlobalStandard en miles de tokens por minuto (cuota: 200)."
+  type        = number
+  default     = 50
+}
+
 variable "etiquetas" {
   description = "Etiquetas aplicadas a todos los recursos."
   type        = map(string)

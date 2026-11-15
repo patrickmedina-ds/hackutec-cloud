@@ -1,4 +1,4 @@
-"""Lambda `clasificar-ia`: IA con Amazon Bedrock y respaldo por reglas locales.
+"""Lambda `clasificar-ia`: IA con Azure OpenAI y respaldo por reglas locales.
 
 Contrato en contratos/integraciones.md sección 4. Nunca lanza excepciones a la
 Step Function: ante cualquier fallo responde con reglas y `fuente = "reglas"`.
@@ -13,12 +13,12 @@ from concurrent.futures import TimeoutError as TiempoAgotado
 
 import prompts
 import reglas
-import bedrock
+import azure_openai
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
-LIMITE_IA_S = 8.0  # presupuesto total para Bedrock; pasado esto, reglas
+LIMITE_IA_S = 8.0  # presupuesto total para Azure OpenAI (incluye token); pasado esto, reglas
 
 _MAX_DESCRIPCION = 1000
 _MAX_DESCRIPCIONES = 20
@@ -114,17 +114,17 @@ _ACCIONES = {
 
 
 def _llamar_con_limite(accion: str, entrada: dict) -> dict:
-    """Ejecuta la llamada a Bedrock con un tope duro de LIMITE_IA_S segundos."""
+    """Ejecuta la llamada a Azure OpenAI con un tope duro de LIMITE_IA_S segundos."""
     pool = ThreadPoolExecutor(max_workers=1)
     try:
         futuro = pool.submit(
-            bedrock.generar_json, prompts.SISTEMA, prompts.construir(accion, entrada),
+            azure_openai.generar_json, prompts.SISTEMA, prompts.construir(accion, entrada),
             prompts.ESQUEMAS[accion], LIMITE_IA_S,
         )
         try:
             return futuro.result(timeout=LIMITE_IA_S)
         except TiempoAgotado as exc:
-            raise bedrock.ErrorBedrock(f"Bedrock superó {LIMITE_IA_S}s") from exc
+            raise azure_openai.ErrorIA(f"Azure OpenAI superó {LIMITE_IA_S}s") from exc
     finally:
         pool.shutdown(wait=False)  # no esperar al hilo si quedó colgado
 
@@ -142,7 +142,7 @@ def procesar(evento: dict) -> dict:
 
     try:
         resultado = normalizar(_llamar_con_limite(accion, entrada), entrada)
-        resultado["fuente"] = "bedrock"
+        resultado["fuente"] = "azure-openai"
     except Exception as exc:  # noqa: BLE001 - el respaldo debe cubrir TODO
         log.warning("Respaldo por reglas en %s: %s", accion, exc)
         resultado = {**respaldo(entrada), "fuente": "reglas"}

@@ -35,6 +35,16 @@ output "acs_email_remitente" {
   value = "DoNotReply@${azurerm_email_communication_service_domain.azure.mail_from_sender_domain}"
 }
 
+output "openai_endpoint" {
+  description = "SSM /telecorp/<stage>/azure/openai-endpoint"
+  value       = azurerm_cognitive_account.openai.endpoint
+}
+
+output "openai_deployment" {
+  description = "SSM /telecorp/<stage>/azure/openai-deployment"
+  value       = azurerm_cognitive_deployment.chat.name
+}
+
 output "grupo_recursos" {
   value = azurerm_resource_group.main.name
 }

@@ -1,4 +1,4 @@
-"""Prompts (en español) y esquemas de respuesta de la herramienta de Bedrock por acción."""
+"""Prompts (en español) y esquemas de respuesta de la salida estructurada (json_schema strict) de Azure OpenAI por acción."""
 
 from __future__ import annotations
 

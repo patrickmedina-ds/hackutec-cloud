@@ -25,7 +25,7 @@ def test_cloudevent_cumple_contrato(tipo):
         ("Incidencia.CambioEstado", "c7a1e0f2"),
         ("Zona.UmbralSuperado", "LIM-MIR-01"),
         ("Antena.CambioEstado", "LIM-MIR-01"),
-        ("Notificacion.Fallida", "c7a1e0f2"),
+        ("Notificacion.Solicitada", "c7a1e0f2"),
     ],
 )
 def test_subject_es_zona_o_incidencia(tipo, subject):

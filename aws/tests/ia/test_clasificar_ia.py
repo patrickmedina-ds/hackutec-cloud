@@ -1,131 +1,230 @@
-"""Pruebas de clasificar-ia: cliente Bedrock simulado con botocore Stubber (sin red ni nubes)."""
+"""Pruebas de clasificar-ia: Azure OpenAI con HTTP simulado (sin red ni nubes).
 
+Entra y Azure OpenAI se simulan con un `requests.Session` falso; Cognito Identity con
+botocore Stubber; SSM con un cliente falso.
+"""
+
+import json
+import os
 import sys
 import time
 from pathlib import Path
 
 import boto3
 import pytest
-from botocore.exceptions import ReadTimeoutError
+import requests
 from botocore.stub import Stubber
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "clasificar_ia"))
+RAIZ = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(RAIZ / "src" / "clasificar_ia"))
+sys.path.insert(0, str(RAIZ / "layers" / "comun" / "python"))
+for _m in ("app", "prompts", "reglas", "azure_openai"):
+    sys.modules.pop(_m, None)
+os.environ["STAGE"] = "test"
 
 import app  # noqa: E402
-import bedrock  # noqa: E402
+import azure_openai  # noqa: E402
 import reglas  # noqa: E402
+from telecorp_comun import entra  # noqa: E402
 
-MODELO = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-
-
-def respuesta_tool(entrada, nombre=bedrock.NOMBRE_HERRAMIENTA):
-    contenido = [{"toolUse": {"toolUseId": "t1", "name": nombre, "input": entrada}}]
-    return {
-        "output": {"message": {"role": "assistant", "content": contenido}},
-        "stopReason": "tool_use",
-        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
-        "metrics": {"latencyMs": 1},
-    }
+ENDPOINT = "https://telecorp-test-openai.openai.azure.com/"
+CONFIG = {
+    "/telecorp/test/azure/tenant-id": "tenant-1",
+    "/telecorp/test/azure/client-id": "cliente-1",
+    "/telecorp/test/azure/openai-endpoint": ENDPOINT,
+    "/telecorp/test/azure/openai-deployment": "gpt-4.1-mini",
+    "/telecorp/test/aws/identity-pool-id": "us-east-1:pool",
+}
 
 
-def respuesta_texto(texto):
-    return {
-        "output": {"message": {"role": "assistant", "content": [{"text": texto}]}},
-        "stopReason": "end_turn",
-        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
-        "metrics": {"latencyMs": 1},
-    }
+class Resp:
+    def __init__(self, status=200, cuerpo=None, texto=""):
+        self.status_code = status
+        self._c = cuerpo if cuerpo is not None else {}
+        self.text = texto or json.dumps(self._c)
+
+    def json(self):
+        return self._c
+
+
+class Http:
+    """Sesión falsa: Entra responde `entra`; Azure OpenAI responde con la cola `openai`."""
+
+    def __init__(self):
+        self.llamadas = []
+        self.openai = []
+        self.entra = Resp(200, {"access_token": "token-entra", "expires_in": 3599})
+
+    def post(self, url, **kw):
+        self.llamadas.append({"url": url, **kw})
+        if "login.microsoftonline.com" in url:
+            return self.entra
+        if not self.openai:
+            raise AssertionError("llamada inesperada a Azure OpenAI")
+        r = self.openai.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    def a_openai(self):
+        return [c for c in self.llamadas if "openai.azure.com" in c["url"]]
+
+    def a_entra(self):
+        return [c for c in self.llamadas if "login.microsoftonline.com" in c["url"]]
+
+
+class Ssm:
+    def __init__(self, valores):
+        self.valores = valores
+
+    def get_parameters(self, Names, WithDecryption):
+        return {"Parameters": [{"Name": n, "Value": self.valores[n]} for n in Names if n in self.valores]}
+
+
+def chat(contenido, finish="stop"):
+    texto = contenido if isinstance(contenido, str) else json.dumps(contenido)
+    return Resp(200, {"choices": [{"index": 0, "finish_reason": finish,
+                                   "message": {"role": "assistant", "content": texto}}]})
+
+
+class IA:
+    def __init__(self, http, ssm):
+        self.http = http
+        self.ssm = ssm
+
+    def responder(self, *rs):
+        self.http.openai.extend(rs)
+
+    @property
+    def llamadas(self):
+        return [c["json"] for c in self.http.a_openai()]
 
 
 @pytest.fixture
 def ia(monkeypatch):
-    """Cliente bedrock-runtime con Stubber; captura los parámetros de cada llamada."""
-    monkeypatch.delenv("MODELO_IA", raising=False)
-    cliente = boto3.client("bedrock-runtime", region_name="us-east-1",
-                           aws_access_key_id="x", aws_secret_access_key="x")
-    stub = Stubber(cliente)
-    monkeypatch.setitem(bedrock._cache, "cliente", cliente)
-    llamadas = []
-    original = cliente.converse
-
-    def espia(**kwargs):
-        llamadas.append(kwargs)
-        return original(**kwargs)
-
-    monkeypatch.setattr(cliente, "converse", espia)
-    stub.activate()
-    stub.llamadas = llamadas
-    yield stub
-    stub.deactivate()
+    http, ssm = Http(), Ssm(dict(CONFIG))
+    for k, v in {"http": http, "ssm": ssm, "config": {}, "leido_en": None, "tokens": None}.items():
+        monkeypatch.setitem(azure_openai._cache, k, v)
+    monkeypatch.setattr(azure_openai, "jwt_cognito", lambda pool: "jwt-cognito")
+    return IA(http, ssm)
 
 
-# ---------- Vía feliz (Bedrock simulado) ----------
+def esquema_de(llamada):
+    rf = llamada["response_format"]
+    assert rf["type"] == "json_schema" and rf["json_schema"]["strict"] is True
+    return rf["json_schema"]["schema"]
+
+
+# ---------- Vía feliz (Azure OpenAI simulado) ----------
 
 def test_clasificar_feliz(ia):
-    ia.add_response("converse", respuesta_tool(
-        {"tipo": "SIN_INTERNET", "severidad": "ALTA", "resumen": "Sin internet en clínica", "confianza": 0.86}))
+    ia.responder(chat({"tipo": "SIN_INTERNET", "severidad": "ALTA", "resumen": "Sin internet en clínica", "confianza": 0.86}))
     r = app.handler({"accion": "CLASIFICAR", "incidenciaId": "i1", "tipo": "LENTITUD",
                      "descripcion": "no hay internet en la clínica", "zonaId": "LIM-MIR-01", "tipoZona": "MEDICA"})
     assert r == {"tipo": "SIN_INTERNET", "severidad": "ALTA", "resumen": "Sin internet en clínica",
-                 "confianza": 0.86, "fuente": "bedrock"}
+                 "confianza": 0.86, "fuente": "azure-openai"}
+    (llamada_http,) = ia.http.a_openai()
+    assert llamada_http["url"] == (
+        "https://telecorp-test-openai.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions"
+        "?api-version=2024-10-21")
+    assert llamada_http["headers"]["Authorization"] == "Bearer token-entra"
+    (entra_http,) = ia.http.a_entra()
+    assert entra_http["url"] == "https://login.microsoftonline.com/tenant-1/oauth2/v2.0/token"
+    assert entra_http["data"]["scope"] == "https://cognitiveservices.azure.com/.default"
+    assert entra_http["data"]["client_assertion"] == "jwt-cognito"
+    assert entra_http["data"]["client_id"] == "cliente-1"
     llamada = ia.llamadas[0]
-    assert llamada["modelId"] == MODELO
-    assert llamada["inferenceConfig"]["temperature"] <= 0.3
-    tc = llamada["toolConfig"]
-    nombre = tc["tools"][0]["toolSpec"]["name"]
-    assert tc["toolChoice"] == {"tool": {"name": nombre}}
-    esquema = tc["tools"][0]["toolSpec"]["inputSchema"]["json"]
-    assert set(esquema["properties"]) == {"tipo", "severidad", "resumen", "confianza"}
+    assert llamada["temperature"] <= 0.3
+    esquema = esquema_de(llamada)
+    assert esquema["additionalProperties"] is False
+    assert set(esquema["required"]) == set(esquema["properties"]) == {"tipo", "severidad", "resumen", "confianza"}
     assert esquema["properties"]["tipo"]["enum"] == list(reglas.TIPOS)
     assert esquema["properties"]["severidad"]["enum"] == list(reglas.SEVERIDADES)
-    assert "no hay internet en la clínica" in llamada["messages"][0]["content"][0]["text"]
+    assert llamada["messages"][0]["role"] == "system"
+    assert "no hay internet en la clínica" in llamada["messages"][1]["content"]
 
 
 def test_resumir_colectivo_feliz(ia):
-    ia.add_response("converse", respuesta_tool(
-        {"resumen": "Caída de antena en Miraflores", "severidad": "CRITICA", "causaProbable": "Antena ANT-1 caída"}))
+    ia.responder(chat({"resumen": "Caída de antena en Miraflores", "severidad": "CRITICA",
+                       "causaProbable": "Antena ANT-1 caída"}))
     r = app.handler({"accion": "RESUMIR_COLECTIVO", "incidenteColectivoId": "COL-1", "zonaId": "LIM-MIR-01",
                      "tipoZona": "MEDICA", "descripciones": ["sin señal", "no navega"],
                      "antenas": [{"antenaId": "ANT-1", "estado": "CAIDA"}]})
     assert r == {"resumen": "Caída de antena en Miraflores", "severidad": "CRITICA",
-                 "causaProbable": "Antena ANT-1 caída", "fuente": "bedrock"}
-    esquema = ia.llamadas[0]["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]
+                 "causaProbable": "Antena ANT-1 caída", "fuente": "azure-openai"}
+    esquema = esquema_de(ia.llamadas[0])
     assert set(esquema["properties"]) == {"resumen", "severidad", "causaProbable"}
     assert esquema["properties"]["severidad"]["enum"] == list(reglas.SEVERIDADES)
 
 
 def test_redactar_aviso_feliz(ia):
-    ia.add_response("converse", respuesta_tool(
-        {"asunto": "Red TeleCorp: incidencia identificada en tu zona",
-         "mensaje": "Identificamos una incidencia en Miraflores y un equipo la está atendiendo."}))
+    ia.responder(chat({"asunto": "Red TeleCorp: incidencia identificada en tu zona",
+                       "mensaje": "Identificamos una incidencia en Miraflores y un equipo la está atendiendo."}))
     r = app.handler({"accion": "REDACTAR_AVISO", "estado": "ATENDIDA", "zonaNombre": "Miraflores", "canal": "EMAIL"})
-    assert r["fuente"] == "bedrock"
+    assert r["fuente"] == "azure-openai"
     assert r["asunto"].startswith("Red TeleCorp")
     assert "atendiendo" in r["mensaje"]
-    esquema = ia.llamadas[0]["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]
-    assert set(esquema["properties"]) == {"asunto", "mensaje"}
+    assert set(esquema_de(ia.llamadas[0])["properties"]) == {"asunto", "mensaje"}
 
 
-def test_modelo_configurable_por_variable_de_entorno(ia, monkeypatch):
-    monkeypatch.setenv("MODELO_IA", "us.anthropic.otro-modelo-v1:0")
-    ia.add_response("converse", respuesta_tool({"asunto": "Red TeleCorp: aviso", "mensaje": "hola"}))
-    app.handler({"accion": "REDACTAR_AVISO", "estado": "ATENDIDA", "canal": "EMAIL"})
-    assert ia.llamadas[0]["modelId"] == "us.anthropic.otro-modelo-v1:0"
+# ---------- Tokens y configuración ----------
+
+def test_token_de_entra_se_reutiliza_entre_invocaciones(ia):
+    ia.responder(chat({"asunto": "Red TeleCorp: aviso", "mensaje": "hola"}),
+                 chat({"asunto": "Red TeleCorp: aviso", "mensaje": "hola"}))
+    for _ in range(2):
+        r = app.handler({"accion": "REDACTAR_AVISO", "estado": "ATENDIDA", "canal": "EMAIL"})
+        assert r["fuente"] == "azure-openai"
+    assert len(ia.http.a_entra()) == 1
+
+
+def test_401_descarta_el_token_y_usa_reglas(ia):
+    ia.responder(Resp(401, texto="Unauthorized"), chat({"asunto": "Red TeleCorp: aviso", "mensaje": "hola"}))
+    r1 = app.handler({"accion": "REDACTAR_AVISO", "estado": "ATENDIDA", "canal": "EMAIL"})
+    r2 = app.handler({"accion": "REDACTAR_AVISO", "estado": "ATENDIDA", "canal": "EMAIL"})
+    assert r1["fuente"] == "reglas" and r2["fuente"] == "azure-openai"
+    assert len(ia.http.a_entra()) == 2
+
+
+def test_entra_rechaza_la_federacion_usa_reglas(ia):
+    ia.http.entra = Resp(400, texto="AADSTS70021: No matching federated identity record")
+    r = app.handler({"accion": "CLASIFICAR", "descripcion": "no hay internet"})
+    assert r["fuente"] == "reglas" and ia.http.a_openai() == []
+
+
+def test_falta_configuracion_usa_reglas(ia):
+    del ia.ssm.valores["/telecorp/test/azure/openai-endpoint"]
+    r = app.handler({"accion": "CLASIFICAR", "descripcion": "no hay internet"})
+    assert r["fuente"] == "reglas" and ia.http.a_openai() == []
+
+
+def test_jwt_cognito_con_stubber():
+    cognito = boto3.client("cognito-identity", region_name="us-east-1",
+                           aws_access_key_id="x", aws_secret_access_key="x")
+    with Stubber(cognito) as stub:
+        stub.add_response(
+            "get_open_id_token_for_developer_identity",
+            {"IdentityId": "us-east-1:id", "Token": "jwt"},
+            {"IdentityPoolId": "us-east-1:pool", "Logins": {"telecorp.aws": "telecorp-test"}, "TokenDuration": 300},
+        )
+        assert entra.jwt_cognito("us-east-1:pool", cognito) == "jwt"
 
 
 # ---------- Respaldo ----------
 
 FALLAS = [
-    ("error", lambda ia: ia.add_client_error("converse", "ThrottlingException", "limite", 429)),
-    ("acceso", lambda ia: ia.add_client_error("converse", "AccessDeniedException", "sin acceso", 403)),
-    ("timeout", lambda ia: ia.add_client_error("converse", "ModelTimeoutException", "tarda", 408)),
-    ("sin_herramienta", lambda ia: ia.add_response("converse", respuesta_texto("no uso la herramienta"))),
-    ("herramienta_ajena", lambda ia: ia.add_response("converse", respuesta_tool({"tipo": "OTRO"}, nombre="otra"))),
-    ("input_no_objeto", lambda ia: ia.add_response("converse", respuesta_tool("{texto"))),
-    ("input_lista", lambda ia: ia.add_response("converse", respuesta_tool([1, 2, 3]))),
-    ("enum_invalido", lambda ia: ia.add_response("converse", respuesta_tool(
+    ("throttling", lambda ia: ia.responder(Resp(429, texto="Too Many Requests"))),
+    ("acceso", lambda ia: ia.responder(Resp(403, texto="PermissionDenied"))),
+    ("error_500", lambda ia: ia.responder(Resp(500, texto="boom"))),
+    ("timeout_red", lambda ia: ia.responder(requests.ReadTimeout("tarda"))),
+    ("no_json", lambda ia: ia.responder(chat("esto no es json"))),
+    ("truncado", lambda ia: ia.responder(chat({"tipo": "SIN_INTERNET"}, finish="length"))),
+    ("filtro", lambda ia: ia.responder(chat({"tipo": "SIN_INTERNET"}, finish="content_filter"))),
+    ("lista", lambda ia: ia.responder(chat([1, 2, 3]))),
+    ("enum_invalido", lambda ia: ia.responder(chat(
         {"tipo": "INVENTADO", "severidad": "ALTA", "resumen": "x", "confianza": 1}))),
-    ("incompleto", lambda ia: ia.add_response("converse", respuesta_tool({"tipo": "SIN_INTERNET"}))),
+    ("incompleto", lambda ia: ia.responder(chat({"tipo": "SIN_INTERNET"}))),
+    ("sin_choices", lambda ia: ia.responder(Resp(200, {"choices": []}))),
 ]
 
 
@@ -139,19 +238,8 @@ def test_clasificar_respaldo_ante_fallas(ia, preparar):
     assert 0 <= r["confianza"] <= 1
 
 
-def test_respaldo_ante_timeout_de_lectura_de_red(monkeypatch):
-    class Cliente:
-        def converse(self, **kw):
-            raise ReadTimeoutError(endpoint_url="https://bedrock-runtime")
-
-    monkeypatch.setitem(bedrock._cache, "cliente", Cliente())
-    r = app.handler({"accion": "CLASIFICAR", "descripcion": "no hay internet"})
-    assert r["fuente"] == "reglas" and r["tipo"] == "SIN_INTERNET"
-
-
 def test_respaldo_en_las_tres_acciones_con_error(ia):
-    ia.add_client_error("converse", "InternalServerException", "boom", 500)
-    ia.add_client_error("converse", "InternalServerException", "boom", 500)
+    ia.responder(Resp(500, texto="boom"), Resp(500, texto="boom"))
     c = app.handler({"accion": "RESUMIR_COLECTIVO", "zonaId": "Z", "descripciones": ["a"],
                      "antenas": [{"antenaId": "A1", "estado": "CAIDA"}, {"antenaId": "A2", "estado": "CAIDA"}]})
     assert c["fuente"] == "reglas" and c["severidad"] == "CRITICA" and "A1" in c["causaProbable"]
@@ -164,7 +252,7 @@ def test_respaldo_por_tiempo_excedido(monkeypatch):
         time.sleep(2)
         return {"tipo": "OTRO", "severidad": "BAJA", "resumen": "x", "confianza": 1}
 
-    monkeypatch.setattr(bedrock, "generar_json", lenta)
+    monkeypatch.setattr(azure_openai, "generar_json", lenta)
     monkeypatch.setattr(app, "LIMITE_IA_S", 0.2)
     inicio = time.monotonic()
     r = app.handler({"accion": "CLASIFICAR", "descripcion": "no hay internet"})
@@ -176,7 +264,7 @@ def test_nunca_lanza_excepcion(monkeypatch):
     def explota(*a, **k):
         raise RuntimeError("fallo inesperado")
 
-    monkeypatch.setattr(bedrock, "generar_json", explota)
+    monkeypatch.setattr(azure_openai, "generar_json", explota)
     assert app.handler({"accion": "CLASIFICAR"})["fuente"] == "reglas"
     assert app.handler(None)["fuente"] == "reglas"
     assert app.handler({"accion": "NO_EXISTE"})["fuente"] == "reglas"
@@ -189,9 +277,9 @@ def test_nunca_lanza_excepcion(monkeypatch):
 
 def test_sms_del_modelo_se_recorta_a_160(ia):
     largo = "Identificamos una incidencia en tu zona. " * 10
-    ia.add_response("converse", respuesta_tool({"asunto": "Red TeleCorp: aviso", "mensaje": largo}))
+    ia.responder(chat({"asunto": "Red TeleCorp: aviso", "mensaje": largo}))
     r = app.handler({"accion": "REDACTAR_AVISO", "estado": "ATENDIDA", "canal": "SMS"})
-    assert r["fuente"] == "bedrock"
+    assert r["fuente"] == "azure-openai"
     assert 0 < len(r["mensaje"]) <= 160
 
 
@@ -205,7 +293,7 @@ def test_estados_sin_aviso_no_llaman_al_modelo(ia):
     for estado in ("REGISTRADA", "CERRADA"):
         r = app.handler({"accion": "REDACTAR_AVISO", "estado": estado, "canal": "SMS"})
         assert r["mensaje"] == "" and r["fuente"] == "reglas"
-    assert ia.llamadas == []
+    assert ia.http.llamadas == []
 
 
 def test_plantillas_respetan_el_sentido_de_eventos_md():
@@ -220,10 +308,9 @@ def test_plantillas_respetan_el_sentido_de_eventos_md():
 # ---------- Normalización ----------
 
 def test_normaliza_enums_longitudes_y_confianza(ia):
-    ia.add_response("converse", respuesta_tool(
-        {"tipo": " sin-internet ", "severidad": "crítica", "resumen": "r " * 300, "confianza": 7}))
+    ia.responder(chat({"tipo": " sin-internet ", "severidad": "crítica", "resumen": "r " * 300, "confianza": 7}))
     r = app.handler({"accion": "CLASIFICAR", "descripcion": "x"})
-    assert r["fuente"] == "bedrock"
+    assert r["fuente"] == "azure-openai"
     assert r["tipo"] == "SIN_INTERNET"
     assert r["severidad"] == "CRITICA"
     assert len(r["resumen"]) <= 200
@@ -236,7 +323,7 @@ def test_confianza_entre_0_y_1(bruto, esperado):
 
 
 def test_resumir_con_severidad_invalida_usa_reglas(ia):
-    ia.add_response("converse", respuesta_tool({"resumen": "x", "severidad": "ENORME", "causaProbable": "y"}))
+    ia.responder(chat({"resumen": "x", "severidad": "ENORME", "causaProbable": "y"}))
     r = app.handler({"accion": "RESUMIR_COLECTIVO", "zonaId": "Z", "descripciones": ["a"], "antenas": []})
     assert r["fuente"] == "reglas"
 

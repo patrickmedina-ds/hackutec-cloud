@@ -7,13 +7,13 @@ import boto3
 import pytest
 import requests
 from apoyo_puente import EVENTOS, ConfigFalsa, Respuesta
-from destino_azure import PublicadorEventGrid, ProveedorTokenEntra
+from destino_azure import PublicadorEventGrid, proveedor_token
 from moto import mock_aws
 
 
 def _publicadores(http, config=None):
     config = config or ConfigFalsa()
-    tokens = ProveedorTokenEntra(config, http, origen_jwt=lambda: "jwt-aws")
+    tokens = proveedor_token(config, http, origen_jwt=lambda: "jwt-aws")
     return {"azure": PublicadorEventGrid(config, http, tokens)}
 
 
@@ -84,7 +84,7 @@ def test_handler_lee_configuracion_real_de_ssm(http, monkeypatch):
     import configuracion
     import destino_azure
 
-    monkeypatch.setattr(destino_azure, "jwt_iam_saliente", lambda: "jwt-aws")
+    monkeypatch.setattr(destino_azure, "jwt_aws", lambda: "jwt-aws")
     monkeypatch.setattr(app.requests, "Session", lambda: http)
     monkeypatch.setattr(app, "_estado", {})
     with mock_aws():

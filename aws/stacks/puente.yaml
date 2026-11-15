@@ -3,7 +3,9 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   Red TeleCorp - bloque B. Lambda puente-multinube que replica cada evento telecorp.*
   del bus a Event Grid (Azure) como CloudEvents 1.0, con federación
-  de identidades sin llaves guardadas (ver docs/federacion.md).
+  de identidades sin llaves guardadas: Cognito Identity Pool (identidad de
+  desarrollador) + credencial federada de Entra ID (ver docs/federacion.md).
+  Learner Lab: todo usa LabRole, sin recursos IAM.
 
 Parameters:
   Stage:
@@ -13,6 +15,9 @@ Parameters:
   ComunLayerArn:
     Type: String
     Description: ARN de la capa telecorp_comun (la crea el stack raíz).
+  RolLabArn:
+    Type: String
+    Description: ARN del rol LabRole (Learner Lab no permite crear roles IAM).
 
 Resources:
   # ---------------------------------------------------------------------------
@@ -45,63 +50,24 @@ Resources:
                 aws:SourceArn: !GetAtt ReglaPuente.Arn
 
   # ---------------------------------------------------------------------------
-  # Rol de nombre fijo: Entra (subject) confía en él.
+  # Cognito Identity Pool: emisor del JWT que Entra ID acepta (sin llaves).
+  # Solo identidades de desarrollador; nada de identidades no autenticadas.
   # ---------------------------------------------------------------------------
-  PuenteRol:
-    Type: AWS::IAM::Role
+  IdentityPool:
+    Type: AWS::Cognito::IdentityPool
     Properties:
-      RoleName: !Sub telecorp-${Stage}-puente-multinube-rol
-      Description: Rol de la Lambda puente-multinube (federado con Entra ID)
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-      ManagedPolicyArns:
-        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSXRayDaemonWriteAccess
-      Policies:
-        - PolicyName: puente-multinube
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: LeerConfiguracionFederacion
-                Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                  - ssm:GetParameters
-                Resource:
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/azure/*
-              - Sid: DescifrarParametrosSeguros
-                Effect: Allow
-                Action: kms:Decrypt
-                Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
-                Condition:
-                  StringEquals:
-                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
-              # Federación saliente de IAM: JWT solo para Entra ID, RS256 y máx. 5 min.
-              - Sid: JwtParaEntraId
-                Effect: Allow
-                Action: sts:GetWebIdentityToken
-                Resource: "*"
-                Condition:
-                  ForAllValues:StringEquals:
-                    sts:IdentityTokenAudience: api://AzureADTokenExchange
-                  "Null":
-                    sts:IdentityTokenAudience: "false"
-                  StringEquals:
-                    sts:SigningAlgorithm: RS256
-                  NumericLessThanEquals:
-                    sts:DurationSeconds: 300
-              - Sid: DestinoFallos
-                Effect: Allow
-                Action: sqs:SendMessage
-                Resource: !GetAtt PuenteDLQ.Arn
+      IdentityPoolName: !Sub telecorp_${Stage}_federacion_azure
+      AllowUnauthenticatedIdentities: false
+      AllowClassicFlow: false
+      DeveloperProviderName: telecorp.aws
+
+  IdentityPoolIdParametro:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /telecorp/${Stage}/aws/identity-pool-id
+      Type: String
+      Value: !Ref IdentityPool
+      Description: Audiencia de la credencial federada de Entra ID (puente e IA)
 
   PuenteLogs:
     Type: AWS::Logs::LogGroup
@@ -125,7 +91,7 @@ Resources:
         - arm64
       MemorySize: 256
       Timeout: 30
-      Role: !GetAtt PuenteRol.Arn
+      Role: !Ref RolLabArn
       Tracing: Active
       Layers:
         - !Ref ComunLayerArn
@@ -135,8 +101,8 @@ Resources:
           BUS_EVENTOS: !Sub telecorp-${Stage}-eventos
           POWERTOOLS_SERVICE_NAME: puente-multinube
           DESTINOS: azure
-          AZURE_ORIGEN_JWT: iam # plan B: cognito (ver docs/federacion.md)
-          AWS_STS_REGIONAL_ENDPOINTS: regional
+          COGNITO_IDENTITY_POOL_ID: !Ref IdentityPool
+          COGNITO_PROVEEDOR_DESARROLLADOR: telecorp.aws
       # La regla invoca la Lambda de forma asíncrona: si la función lanza error,
       # Lambda reintenta (2 veces) y luego deja el evento en la DLQ.
       EventInvokeConfig:
@@ -221,9 +187,9 @@ Resources:
 Outputs:
   PuenteFuncionArn:
     Value: !GetAtt PuenteFuncion.Arn
-  PuenteRolArn:
-    Description: Sujeto confiado por la credencial federada de Entra ID
-    Value: !GetAtt PuenteRol.Arn
+  IdentityPoolId:
+    Description: Audiencia de la credencial federada (variable Terraform aws_cognito_identity_pool_id)
+    Value: !Ref IdentityPool
   PuenteDLQUrl:
     Value: !Ref PuenteDLQ
   PuenteDLQArn:
