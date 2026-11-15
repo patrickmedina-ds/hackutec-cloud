@@ -1,0 +1,266 @@
+[
+  {
+    "antenaId": "ANT-LIM-MIR-01-01",
+    "zonaId": "LIM-MIR-01",
+    "lat": -12.1219,
+    "lon": -77.0297
+  },
+  {
+    "antenaId": "ANT-LIM-MIR-01-02",
+    "zonaId": "LIM-MIR-01",
+    "lat": -12.1179,
+    "lon": -77.0327
+  },
+  {
+    "antenaId": "ANT-LIM-MIR-01-03",
+    "zonaId": "LIM-MIR-01",
+    "lat": -12.1269,
+    "lon": -77.0257
+  },
+  {
+    "antenaId": "ANT-LIM-MIR-01-04",
+    "zonaId": "LIM-MIR-01",
+    "lat": -12.1199,
+    "lon": -77.0237
+  },
+  {
+    "antenaId": "ANT-LIM-SIS-01-01",
+    "zonaId": "LIM-SIS-01",
+    "lat": -12.0977,
+    "lon": -77.0363
+  },
+  {
+    "antenaId": "ANT-LIM-SIS-01-02",
+    "zonaId": "LIM-SIS-01",
+    "lat": -12.0937,
+    "lon": -77.0393
+  },
+  {
+    "antenaId": "ANT-LIM-SIS-01-03",
+    "zonaId": "LIM-SIS-01",
+    "lat": -12.1027,
+    "lon": -77.0323
+  },
+  {
+    "antenaId": "ANT-LIM-SMI-01-01",
+    "zonaId": "LIM-SMI-01",
+    "lat": -12.077,
+    "lon": -77.0907
+  },
+  {
+    "antenaId": "ANT-LIM-SMI-01-02",
+    "zonaId": "LIM-SMI-01",
+    "lat": -12.073,
+    "lon": -77.0937
+  },
+  {
+    "antenaId": "ANT-LIM-SMI-01-03",
+    "zonaId": "LIM-SMI-01",
+    "lat": -12.082,
+    "lon": -77.0867
+  },
+  {
+    "antenaId": "ANT-LIM-SJL-01-01",
+    "zonaId": "LIM-SJL-01",
+    "lat": -11.986,
+    "lon": -77.002
+  },
+  {
+    "antenaId": "ANT-LIM-SJL-01-02",
+    "zonaId": "LIM-SJL-01",
+    "lat": -11.982,
+    "lon": -77.005
+  },
+  {
+    "antenaId": "ANT-LIM-SJL-01-03",
+    "zonaId": "LIM-SJL-01",
+    "lat": -11.991,
+    "lon": -76.998
+  },
+  {
+    "antenaId": "ANT-LIM-SJL-01-04",
+    "zonaId": "LIM-SJL-01",
+    "lat": -11.984,
+    "lon": -76.996
+  },
+  {
+    "antenaId": "ANT-LIM-VES-01-01",
+    "zonaId": "LIM-VES-01",
+    "lat": -12.2116,
+    "lon": -76.9323
+  },
+  {
+    "antenaId": "ANT-LIM-VES-01-02",
+    "zonaId": "LIM-VES-01",
+    "lat": -12.2076,
+    "lon": -76.9353
+  },
+  {
+    "antenaId": "ANT-LIM-VES-01-03",
+    "zonaId": "LIM-VES-01",
+    "lat": -12.2166,
+    "lon": -76.9283
+  },
+  {
+    "antenaId": "ANT-LIM-VES-01-04",
+    "zonaId": "LIM-VES-01",
+    "lat": -12.2096,
+    "lon": -76.9263
+  },
+  {
+    "antenaId": "ANT-LIM-SJM-01-01",
+    "zonaId": "LIM-SJM-01",
+    "lat": -12.1555,
+    "lon": -76.97
+  },
+  {
+    "antenaId": "ANT-LIM-SJM-01-02",
+    "zonaId": "LIM-SJM-01",
+    "lat": -12.1515,
+    "lon": -76.973
+  },
+  {
+    "antenaId": "ANT-LIM-SJM-01-03",
+    "zonaId": "LIM-SJM-01",
+    "lat": -12.1605,
+    "lon": -76.966
+  },
+  {
+    "antenaId": "ANT-LIM-SJM-01-04",
+    "zonaId": "LIM-SJM-01",
+    "lat": -12.1535,
+    "lon": -76.964
+  },
+  {
+    "antenaId": "ANT-LIM-PLB-01-01",
+    "zonaId": "LIM-PLB-01",
+    "lat": -12.0706,
+    "lon": -77.0785
+  },
+  {
+    "antenaId": "ANT-LIM-PLB-01-02",
+    "zonaId": "LIM-PLB-01",
+    "lat": -12.0666,
+    "lon": -77.0815
+  },
+  {
+    "antenaId": "ANT-LIM-PLB-01-03",
+    "zonaId": "LIM-PLB-01",
+    "lat": -12.0756,
+    "lon": -77.0745
+  },
+  {
+    "antenaId": "ANT-LIM-JMA-01-01",
+    "zonaId": "LIM-JMA-01",
+    "lat": -12.0747,
+    "lon": -77.0525
+  },
+  {
+    "antenaId": "ANT-LIM-JMA-01-02",
+    "zonaId": "LIM-JMA-01",
+    "lat": -12.0707,
+    "lon": -77.0555
+  },
+  {
+    "antenaId": "ANT-LIM-JMA-01-03",
+    "zonaId": "LIM-JMA-01",
+    "lat": -12.0797,
+    "lon": -77.0485
+  },
+  {
+    "antenaId": "ANT-LIM-JMA-01-04",
+    "zonaId": "LIM-JMA-01",
+    "lat": -12.0727,
+    "lon": -77.0465
+  },
+  {
+    "antenaId": "ANT-LIM-ATE-01-01",
+    "zonaId": "LIM-ATE-01",
+    "lat": -12.0371,
+    "lon": -76.9385
+  },
+  {
+    "antenaId": "ANT-LIM-ATE-01-02",
+    "zonaId": "LIM-ATE-01",
+    "lat": -12.0331,
+    "lon": -76.9415
+  },
+  {
+    "antenaId": "ANT-LIM-ATE-01-03",
+    "zonaId": "LIM-ATE-01",
+    "lat": -12.0421,
+    "lon": -76.9345
+  },
+  {
+    "antenaId": "ANT-LIM-CAL-01-01",
+    "zonaId": "LIM-CAL-01",
+    "lat": -12.0219,
+    "lon": -77.1143
+  },
+  {
+    "antenaId": "ANT-LIM-CAL-01-02",
+    "zonaId": "LIM-CAL-01",
+    "lat": -12.0179,
+    "lon": -77.1173
+  },
+  {
+    "antenaId": "ANT-LIM-CAL-01-03",
+    "zonaId": "LIM-CAL-01",
+    "lat": -12.0269,
+    "lon": -77.1103
+  },
+  {
+    "antenaId": "ANT-LIM-CAL-01-04",
+    "zonaId": "LIM-CAL-01",
+    "lat": -12.0199,
+    "lon": -77.1083
+  },
+  {
+    "antenaId": "ANT-LIM-LVI-01-01",
+    "zonaId": "LIM-LVI-01",
+    "lat": -12.07,
+    "lon": -77.01
+  },
+  {
+    "antenaId": "ANT-LIM-LVI-01-02",
+    "zonaId": "LIM-LVI-01",
+    "lat": -12.066,
+    "lon": -77.013
+  },
+  {
+    "antenaId": "ANT-LIM-LVI-01-03",
+    "zonaId": "LIM-LVI-01",
+    "lat": -12.075,
+    "lon": -77.006
+  },
+  {
+    "antenaId": "ANT-LIM-LVI-01-04",
+    "zonaId": "LIM-LVI-01",
+    "lat": -12.068,
+    "lon": -77.004
+  },
+  {
+    "antenaId": "ANT-LIM-COM-01-01",
+    "zonaId": "LIM-COM-01",
+    "lat": -11.94,
+    "lon": -77.056
+  },
+  {
+    "antenaId": "ANT-LIM-COM-01-02",
+    "zonaId": "LIM-COM-01",
+    "lat": -11.936,
+    "lon": -77.059
+  },
+  {
+    "antenaId": "ANT-LIM-COM-01-03",
+    "zonaId": "LIM-COM-01",
+    "lat": -11.945,
+    "lon": -77.052
+  },
+  {
+    "antenaId": "ANT-LIM-COM-01-04",
+    "zonaId": "LIM-COM-01",
+    "lat": -11.938,
+    "lon": -77.05
+  }
+]
