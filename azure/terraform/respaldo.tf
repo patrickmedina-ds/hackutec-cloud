@@ -30,8 +30,8 @@ resource "azurerm_storage_account" "respaldo" {
   allow_nested_items_to_be_public = false
   # Terraform administra el contenedor por el plano de datos con llave compartida; la Function
   # escribe con su identidad administrada (Storage Blob Data Contributor), sin llaves.
-  shared_access_key_enabled       = true
-  tags                            = local.etiquetas
+  shared_access_key_enabled = true
+  tags                      = local.etiquetas
 
   blob_properties {
     versioning_enabled = true

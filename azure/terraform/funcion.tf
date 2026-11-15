@@ -63,15 +63,17 @@ resource "azurerm_function_app_flex_consumption" "main" {
 
   app_settings = {
     APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.main.connection_string
-    STAGE                                 = var.stage
-    COSMOS_ENDPOINT                       = azurerm_cosmosdb_account.main.endpoint
-    COSMOS_BASE                           = azurerm_cosmosdb_sql_database.telecorp.name
-    COSMOS_CONTENEDOR_INCIDENCIAS         = azurerm_cosmosdb_sql_container.incidencias.name
-    COSMOS_CONTENEDOR_ZONAS               = azurerm_cosmosdb_sql_container.zonas.name
-    COSMOS_CONTENEDOR_EVENTOS             = azurerm_cosmosdb_sql_container.eventos_procesados.name
-    RESPALDO_BLOB_ENDPOINT                = azurerm_storage_account.respaldo.primary_blob_endpoint
-    RESPALDO_CONTENEDOR                   = azurerm_storage_container.respaldo.name
-    ACS_ENDPOINT                          = "https://${azurerm_communication_service.main.hostname}"
+    # El host usa identidad administrada para su almacenamiento (con la llave fallaba la firma).
+    AzureWebJobsStorage__accountName = azurerm_storage_account.funcion.name
+    STAGE                            = var.stage
+    COSMOS_ENDPOINT                  = azurerm_cosmosdb_account.main.endpoint
+    COSMOS_BASE                      = azurerm_cosmosdb_sql_database.telecorp.name
+    COSMOS_CONTENEDOR_INCIDENCIAS    = azurerm_cosmosdb_sql_container.incidencias.name
+    COSMOS_CONTENEDOR_ZONAS          = azurerm_cosmosdb_sql_container.zonas.name
+    COSMOS_CONTENEDOR_EVENTOS        = azurerm_cosmosdb_sql_container.eventos_procesados.name
+    RESPALDO_BLOB_ENDPOINT           = azurerm_storage_account.respaldo.primary_blob_endpoint
+    RESPALDO_CONTENEDOR              = azurerm_storage_container.respaldo.name
+    ACS_ENDPOINT                     = "https://${azurerm_communication_service.main.hostname}"
     # ACS (SMS y correo) se autentica con la cadena de conexión; ver CAMBIOS_PROPUESTOS_E.md.
     ACS_CONNECTION_STRING = azurerm_communication_service.main.primary_connection_string
     ACS_EMAIL_REMITENTE   = "DoNotReply@${azurerm_email_communication_service_domain.azure.mail_from_sender_domain}"
@@ -83,6 +85,18 @@ resource "azurerm_function_app_flex_consumption" "main" {
 resource "azurerm_role_assignment" "funcion_blob" {
   scope                = azurerm_storage_account.funcion.id
   role_definition_name = "Storage Blob Data Owner"
+  principal_id         = azurerm_function_app_flex_consumption.main.identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "funcion_colas" {
+  scope                = azurerm_storage_account.funcion.id
+  role_definition_name = "Storage Queue Data Contributor"
+  principal_id         = azurerm_function_app_flex_consumption.main.identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "funcion_tablas" {
+  scope                = azurerm_storage_account.funcion.id
+  role_definition_name = "Storage Table Data Contributor"
   principal_id         = azurerm_function_app_flex_consumption.main.identity[0].principal_id
 }
 

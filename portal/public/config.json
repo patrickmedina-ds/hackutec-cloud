@@ -1,7 +1,7 @@
 {
-  "apiUrl": "",
+  "apiUrl": "https://v8wh8zzm8e.execute-api.us-east-1.amazonaws.com/dev",
   "region": "us-east-1",
-  "cognitoDomain": "",
-  "clientId": "",
-  "redirectUri": ""
+  "cognitoDomain": "telecorp-dev-000000000000.auth.us-east-1.amazoncognito.com",
+  "clientId": "3r8psfm8qg8ceppja51mohbsv8",
+  "redirectUri": "https://green-glacier-0a847041e.4.azurestaticapps.net/"
 }
