@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Despliegue completo de Red TeleCorp en AWS, GCP y Azure.
+# Despliegue completo de Red TeleCorp en AWS y Azure.
 #
 # Uso:
 #   STAGE=dev ./scripts/deploy.sh
@@ -8,7 +8,6 @@
 #   STAGE       stage de despliegue (por defecto: dev)
 #   AWS_REGION  región de AWS (por defecto: us-east-1)
 #   PYTHON      intérprete de Python 3.12 (por defecto: python3)
-#   GCP_PROJECT_ID  proyecto de Google Cloud (o defínelo en gcp/terraform/terraform.tfvars)
 #   SES_REMITENTE   correo remitente verificado en SES (p. ej. avisos@tu-dominio.com)
 #   SWA_DIR     carpeta de la página de estado (por defecto: azure/status-page)
 
@@ -50,7 +49,7 @@ ssm_guardar() {
 
 # ---------------------------------------------------------------------------
 paso "0/6" "Verificando herramientas necesarias"
-for herramienta in aws sam terraform az gcloud node func; do
+for herramienta in aws sam terraform az node func; do
   if ! command -v "$herramienta" >/dev/null 2>&1; then
     morir "No se encontró '$herramienta' en el PATH. Instálala y vuelve a intentar."
   fi
@@ -77,16 +76,11 @@ paso "1/6" "AWS: sam build y sam deploy (stack ${STACK})"
 )
 
 # ---------------------------------------------------------------------------
-paso "2/6" "Federación saliente de IAM, GCP y Azure: terraform apply"
+paso "2/6" "Federación saliente de IAM y Azure: terraform apply"
 # El puente obtiene su JWT para Entra ID con sts:GetWebIdentityToken (docs/federacion.md).
 aws iam enable-outbound-web-identity-federation >/dev/null 2>&1 || true
 EMISOR_AWS="$(aws iam get-outbound-web-identity-federation-info --query IssuerUrl --output text)"
 info "Emisor OIDC de la cuenta: ${EMISOR_AWS}"
-
-VARS_GCP=(-var "stage=${STAGE}" -var "aws_account_id=${CUENTA_AWS}")
-[[ -n "${GCP_PROJECT_ID:-}" ]] && VARS_GCP+=(-var "project_id=${GCP_PROJECT_ID}")
-terraform -chdir="${RAIZ}/gcp/terraform" init -input=false -upgrade >/dev/null
-terraform -chdir="${RAIZ}/gcp/terraform" apply -input=false -auto-approve "${VARS_GCP[@]}"
 
 # Azure va en dos pasadas: la suscripción de Event Grid exige que la función ya esté
 # publicada, así que se crea en el paso 6.
@@ -97,18 +91,11 @@ terraform -chdir="${RAIZ}/azure/terraform" apply -input=false -auto-approve "${V
 
 # ---------------------------------------------------------------------------
 paso "3/6" "Guardando outputs de Terraform en SSM"
-GCP_DIR="${RAIZ}/gcp/terraform"
 AZ_DIR="${RAIZ}/azure/terraform"
 # Se asigna a variables antes de guardar: así un output faltante detiene el script.
-GCP_WIF="$(tf_salida "$GCP_DIR" wif_config)"
-GCP_PROYECTO="$(tf_salida "$GCP_DIR" project_id)"
-GCP_REGION="$(tf_salida "$GCP_DIR" region)"
 AZ_TENANT="$(tf_salida "$AZ_DIR" federacion_tenant_id)"
 AZ_CLIENTE="$(tf_salida "$AZ_DIR" federacion_client_id)"
 AZ_EVENTGRID="$(tf_salida "$AZ_DIR" federacion_eventgrid_endpoint)"
-ssm_guardar "gcp/wif-config"           "$GCP_WIF"
-ssm_guardar "gcp/project-id"           "$GCP_PROYECTO"
-ssm_guardar "gcp/region"               "$GCP_REGION"
 ssm_guardar "azure/tenant-id"          "$AZ_TENANT"
 ssm_guardar "azure/client-id"          "$AZ_CLIENTE"
 ssm_guardar "azure/eventgrid-endpoint" "$AZ_EVENTGRID"

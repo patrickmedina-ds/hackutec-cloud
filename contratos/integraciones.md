@@ -31,7 +31,7 @@ Cola: visibilidad 60 s, `maxReceiveCount` 5 → DLQ (retención 14 días). `regi
 - El simulador puede publicar en IoT (`iot-data publish`) o escribir directo en Kinesis con la misma carga.
 - Umbrales: `telecorp_comun.antenas.clasificar_trafico()`.
 
-## 3. Réplica entre nubes (`puente-multinube`)
+## 3. Réplica a Azure (`puente-multinube`)
 
 La regla del puente envía cada evento del bus a la Lambda, y esta lo convierte a **CloudEvents 1.0 (JSON estructurado)**:
 
@@ -48,20 +48,19 @@ La regla del puente envía cada evento del bus a la Lambda, y esta lo convierte 
 }
 ```
 
-- **GCP:** se publica en Pub/Sub `telecorp-<stage>-eventos`. `data` del mensaje = el CloudEvent completo en JSON. Atributos: `ce_type`, `ce_id`, `zonaId` si existe.
-- **Azure:** se publica en el tema de Event Grid `telecorp-<stage>-eventos` con esquema de entrada **CloudEvents 1.0**.
-- Los dos envíos son independientes: si falla uno, el otro sigue. La Lambda reporta el fallo para que EventBridge reintente (con DLQ propia `telecorp-<stage>-puente-dlq`).
-- Autenticación sin llaves guardadas:
-  - GCP: Workload Identity Federation con proveedor AWS. Configuración en SSM `/telecorp/<stage>/gcp/wif-config` (JSON del archivo de configuración de credenciales externas).
-  - Azure: credencial de identidad federada en una App Registration de Entra ID. Parámetros en SSM `/telecorp/<stage>/azure/tenant-id`, `/client-id`, `/eventgrid-endpoint`.
+- Se publica en el tema de Event Grid `telecorp-<stage>-eventos` (esquema de entrada **CloudEvents 1.0**, `application/cloudevents-batch+json`).
+- Si falla, la Lambda lanza error: Lambda reintenta y, al agotar, el evento va a la DLQ `telecorp-<stage>-puente-dlq`.
+- Autenticación sin llaves: federación saliente de IAM (`sts:GetWebIdentityToken`) → credencial federada de una App Registration de Entra ID. Parámetros SSM `/telecorp/<stage>/azure/tenant-id`, `/client-id`, `/eventgrid-endpoint`. Detalle en `docs/federacion.md`.
+- Entrega al menos una vez: los consumidores deduplican por el `id` del CloudEvent.
 
-### BigQuery (GCP)
-Suscripción BigQuery de Pub/Sub sobre la tabla `telecorp_analitica.eventos_raw` con `write_metadata = true` y columna `data` (JSON). Las vistas (`v_incidencias`, `v_antenas`, `v_colectivos`, `v_recurrencia`) derivan los campos desde `JSON_VALUE(data, '$.data.zonaId')` etc.
+### Cosmos DB y Blob Storage (Azure)
+La función `replicar`:
+- Guarda el CloudEvent crudo en Blob Storage GRS, contenedor `eventos-respaldo`, ruta `aaaa/mm/dd/<tipo>/<ce_id>.json` (respaldo en otra nube).
+- Mantiene en Cosmos DB (base `telecorp`): `incidencias` (pk `/incidenciaId`, último estado), `zonas` (pk `/zonaId`, estado agregado para la página de estado) y `eventos_procesados` (idempotencia por `ce_id`).
+- Con `Notificacion.Fallida`, reenvía el aviso por Azure Communication Services.
 
-### Cosmos DB (Azure)
-Base `telecorp`, contenedores:
-- `incidencias` (pk `/incidenciaId`): último estado de cada incidencia (upsert desde `Incidencia.CambioEstado`).
-- `zonas` (pk `/zonaId`): estado agregado por zona (incidencias abiertas, colectivo activo, antenas degradadas) para la página de estado.
+### Analítica (AWS)
+Regla del bus (excepto `Notificacion.Fallida`, que lleva PII) → Firehose → S3 particionado por `tipo/anio/mes/dia` → tabla Glue `telecorp_<stage>.eventos` → vistas de Athena (`v_incidencias`, `v_transiciones`, `v_antenas_eventos`, `v_colectivos`, `v_top_zonas`, `v_top_antenas`, `v_tipos_problema`, `v_recurrencia`, `v_mttr`). La API `GET /analitica/{reporte}?dias=N` (solo operadores) expone los reportes. Detalle en `aws/analitica/README.md`.
 
 ## 4. IA (`clasificar-ia`)
 
@@ -79,7 +78,8 @@ Salida:
 { "resumen": "...", "severidad": "CRITICA", "causaProbable": "..." }
 { "asunto": "...", "mensaje": "..." }
 ```
-- Modelo: Gemini en Vertex AI (`gemini-2.5-flash`), salida JSON forzada con `response_schema`.
-- Autenticación: la misma federación WIF del puente (SSM `/telecorp/<stage>/gcp/wif-config`).
-- **Respaldo obligatorio:** si Vertex falla o tarda más de 8 s, la Lambda responde con reglas locales (palabras clave → tipo y severidad; plantillas fijas para avisos). Nunca debe romper la SFN.
+- Modelo: **Amazon Bedrock** (API `Converse`), perfil de inferencia configurable con el parámetro `ModeloIa` (por defecto `us.anthropic.claude-haiku-4-5-20251001-v1:0`). Salida JSON forzada con tool use (`toolChoice`).
+- Autenticación: el rol IAM de la Lambda (`bedrock:InvokeModel`). Hay que habilitar el acceso al modelo en la consola de Bedrock.
+- Todas las respuestas incluyen `fuente`: `"bedrock"` o `"reglas"`.
+- **Respaldo obligatorio:** si Bedrock falla o tarda más de 8 s, la Lambda responde con reglas locales (palabras clave → tipo y severidad; plantillas fijas para avisos). Nunca debe romper la SFN.
 - SMS: máximo 160 caracteres.

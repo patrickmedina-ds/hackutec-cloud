@@ -145,7 +145,7 @@ def _ejecutar(args: argparse.Namespace) -> int:
         f"Con {usuarios_distintos} usuarios distintos en la zona (umbral: {UMBRAL_USUARIOS_COLECTIVO} "
         f"en menos de {VENTANA_COLECTIVO_HORAS} h) debería abrirse un incidente colectivo.",
         "La verificación de infraestructura cruza el incidente colectivo con la caída de antenas de la zona.",
-        "clasificar-ia asigna tipo y severidad a cada incidencia, o usa reglas locales si Vertex no responde.",
+        "clasificar-ia asigna tipo y severidad a cada incidencia, o usa reglas locales si Bedrock no responde.",
     ])
 
     print()

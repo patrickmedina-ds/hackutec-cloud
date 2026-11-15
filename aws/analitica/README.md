@@ -1,6 +1,6 @@
 # Analítica de Red TeleCorp (AWS)
 
-Reemplaza BigQuery + Looker Studio (`gcp/sql`, `gcp/docs/looker-studio.md`).
+Reemplaza la analítica que antes estaba en BigQuery y Looker Studio.
 
 ```
 Bus telecorp-<stage>-eventos --regla--> Firehose --> S3 (eventos/tipo=/anio=/mes=/dia=/, JSON por línea, gzip)
@@ -35,7 +35,7 @@ quien despliegue. Para reaplicar tras editar un `.sql`, subir `Revision` en el r
 | `v_incidencias` | último estado por incidencia, `registrada_en`, `solucionada_en`, `duracion_min` |
 | `v_antenas_eventos` | cambios de estado de antena, `degradada` |
 | `v_colectivos` | incidentes colectivos por zona |
-| `v_top_zonas`, `v_top_antenas`, `v_tipos_problema`, `v_recurrencia`, `v_mttr` | agregados portados de `gcp/sql` |
+| `v_top_zonas`, `v_top_antenas`, `v_tipos_problema`, `v_recurrencia`, `v_mttr` | agregados (antes en BigQuery) |
 
 Las vistas acumulan todo el histórico; los filtros por `dias` los aplica la API. Como la
 deduplicación usa ventanas, Athena no poda particiones por fecha a través de `v_eventos`: el costo

@@ -5,7 +5,7 @@ Fuente única de verdad para todos los equipos y agentes. **Nadie cambia un cont
 | Archivo | Qué define |
 |---|---|
 | `README.md` | Convenciones, nombres de recursos, regiones, propiedad de carpetas |
-| `eventos.md` + `eventos.schema.json` | Eventos del bus `telecorp-<stage>-eventos` y su réplica a GCP y Azure |
+| `eventos.md` + `eventos.schema.json` | Eventos del bus `telecorp-<stage>-eventos` y su réplica a Azure |
 | `dynamodb.md` | Tablas, claves, índices y TTL |
 | `openapi.yaml` | API REST del portal |
 | `integraciones.md` | Mensajes de SQS, IoT, CloudEvents entre nubes, contrato de la IA |
@@ -16,7 +16,7 @@ La lógica compartida (estados, umbrales de antenas, prioridad, eventos) ya est�
 
 - Lenguaje: **Python 3.12** en todas las funciones (Lambda `python3.12`, Azure Functions Python 3.12, scripts).
 - AWS: **AWS SAM** (`aws/template.yaml` raíz + stacks anidados en `aws/stacks/`).
-- GCP y Azure: **Terraform** (`gcp/terraform/`, `azure/terraform/`).
+- Azure: **Terraform** (`azure/terraform/`).
 - Pruebas: `pytest` (+ `moto` para AWS). Cada bloque deja sus pruebas en `tests/` dentro de su carpeta.
 
 ## Regiones
@@ -24,7 +24,6 @@ La lógica compartida (estados, umbrales de antenas, prioridad, eventos) ya est�
 | Nube | Región |
 |---|---|
 | AWS | `us-east-1` |
-| Google Cloud | `us-east1` (bucket de respaldo dual-region `NAM4`) |
 | Azure | `westus2` (la suscripción Azure for Students solo permite chilecentral, westus, canadacentral, westus2 y brazilsouth) |
 
 ## Nombres de recursos
@@ -45,7 +44,6 @@ Prefijo: `telecorp-${Stage}-`. `Stage` por defecto: `dev`. Los nombres son deter
 | Step Functions | `telecorp-${Stage}-ciclo-vida`, `telecorp-${Stage}-colectivo`, `telecorp-${Stage}-recurrencia` |
 | Lambdas | `telecorp-${Stage}-<nombre-con-guiones>` (p. ej. `telecorp-dev-clasificar-ia`) |
 | Parámetros SSM | `/telecorp/${Stage}/<nube>/<clave>` |
-| Pub/Sub (GCP) | tema `telecorp-${stage}-eventos` |
 | Event Grid (Azure) | tema `telecorp-${stage}-eventos` |
 
 ## Variables de entorno estándar de las Lambdas
@@ -80,9 +78,9 @@ Cada stack anidado recibe **exactamente** estos parámetros desde la raíz:
 | Bloque | Modelo | Carpetas que escribe |
 |---|---|---|
 | A · Step Functions | Opus | `aws/stacks/orquestacion.yaml`, `aws/statemachines/`, `aws/src/sfn_*/` |
-| B · Federación y puente | Opus | `aws/stacks/puente.yaml`, `aws/src/puente_multinube/`, `gcp/terraform/federacion.tf`, `azure/terraform/federacion.tf`, `docs/federacion.md` |
+| B · Federación y puente | Opus | `aws/stacks/puente.yaml`, `aws/src/puente_multinube/`, `azure/terraform/federacion.tf`, `docs/federacion.md` |
 | C · AWS núcleo | Sonnet | `aws/template.yaml`, `aws/src/registrar_reporte/`, `aws/src/evaluar_antena/`, `aws/src/api_incidencias/`, `aws/samconfig.toml` |
-| D · GCP | Sonnet | `gcp/` (excepto `federacion.tf`) |
+| D · Analítica (antes GCP) | Sonnet | `aws/stacks/analitica.yaml`, `aws/analitica/`, `aws/src/api_analitica/` |
 | E · Azure | Sonnet | `azure/` (excepto `federacion.tf`) |
 | F · Portal | Sonnet | `portal/` |
 | G · IA | Sonnet | `aws/stacks/ia.yaml`, `aws/src/clasificar_ia/` |
@@ -102,3 +100,11 @@ Detalle de cada bloque en `contratos/CAMBIOS_PROPUESTOS_*.md`. Quedan aceptadas:
 - Azure agrega el contenedor `eventos_procesados` (idempotencia por `ce_id`). Las salidas de Terraform de la federación llevan el prefijo `federacion_`.
 - La federación saliente de IAM debe estar activada en la cuenta: `deploy.sh` la activa.
 - `Stage` solo admite minúsculas y dígitos, sin guiones (por el dominio de Cognito y la regla de IoT).
+
+## Cambio de alcance: sin Google Cloud
+
+El proyecto quedó en **dos nubes, AWS y Azure** (la cuenta de GCP no tenía facturación activa):
+- IA: Gemini en Vertex → **Amazon Bedrock** (`aws/stacks/ia.yaml`).
+- Analítica: BigQuery y Looker Studio → **Firehose + S3 + Athena** (`aws/stacks/analitica.yaml`) y API `GET /analitica/{reporte}`.
+- Respaldo en otra nube: Cloud Storage → **Azure Blob Storage GRS** (`azure/terraform/respaldo.tf`).
+- Se eliminó el pronóstico con BigQuery ML.
