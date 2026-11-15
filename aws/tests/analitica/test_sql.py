@@ -75,7 +75,7 @@ def test_columnas_de_tabla_cubren_el_detail(esquema):
     struct = re.search(r"struct<(.+)>\s*$", texto, re.M).group(0)
     for campo in union:
         assert f"{campo}:" in struct, campo
-    # PII: nada de Notificacion.Fallida en la tabla
+    # PII: nada de Notificacion.Solicitada en la tabla
     assert "destino" not in struct
 
 
