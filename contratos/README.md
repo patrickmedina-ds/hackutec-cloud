@@ -25,7 +25,7 @@ La lógica compartida (estados, umbrales de antenas, prioridad, eventos) ya est�
 |---|---|
 | AWS | `us-east-1` |
 | Google Cloud | `us-east1` (bucket de respaldo dual-region `NAM4`) |
-| Azure | `eastus2` |
+| Azure | `westus2` (la suscripción Azure for Students solo permite chilecentral, westus, canadacentral, westus2 y brazilsouth) |
 
 ## Nombres de recursos
 

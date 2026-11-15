@@ -26,7 +26,7 @@ El diagrama completo, con las rutas de datos y los eventos, está en **[arquitec
 |---|---|
 | **AWS** (`us-east-1`) | Portal (CloudFront + S3), API REST con WAF y cuotas, cola SQS de reportes, DynamoDB como fuente de verdad, IoT Core y Kinesis para la telemetría, Step Functions para la automatización, EventBridge como bus, SNS/SES para los avisos. |
 | **Google Cloud** (`us-east1`) | Histórico en BigQuery con vistas analíticas, BigQuery ML para pronósticos, Pub/Sub como réplica de eventos, Cloud Storage dual-region (`NAM4`) como respaldo, Vertex AI con Gemini para clasificar, resumir y redactar. Accede con Workload Identity Federation, sin llaves guardadas. |
-| **Azure** (`eastus2`) | Réplica activa del estado en Cosmos DB serverless, Event Grid como canal de réplica, Azure Functions (Flex Consumption) para replicar y notificar, Communication Services como canal de respaldo para SMS y correo, y la Static Web App con la página de estado por zona. |
+| **Azure** (`westus2`) | Réplica activa del estado en Cosmos DB serverless, Event Grid como canal de réplica, Azure Functions (Flex Consumption) para replicar y notificar, Communication Services como canal de respaldo para SMS y correo, y la Static Web App con la página de estado por zona. |
 
 ## Estructura de carpetas
 

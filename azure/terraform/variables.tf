@@ -5,9 +5,9 @@ variable "stage" {
 }
 
 variable "location" {
-  description = "Región de Azure (contratos/README.md: eastus2)."
+  description = "Región de Azure (contratos/README.md: westus2; Azure for Students solo permite chilecentral, westus, canadacentral, westus2 y brazilsouth)."
   type        = string
-  default     = "eastus2"
+  default     = "westus2"
 }
 
 variable "subscription_id" {
