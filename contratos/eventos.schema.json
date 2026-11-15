@@ -3,71 +3,239 @@
   "$id": "https://telecorp.example/contratos/eventos.schema.json",
   "title": "Eventos Red TeleCorp (campo detail de EventBridge / data de CloudEvents)",
   "$defs": {
-    "estadoIncidencia": { "enum": ["REGISTRADA", "EN_REVISION", "ATENDIDA", "SOLUCIONADA", "CERRADA"] },
-    "estadoAntena": { "enum": ["NORMAL", "CAIDA", "SATURADA", "INHABILITADA"] },
-    "fecha": { "type": "string", "format": "date-time" },
+    "estadoIncidencia": {
+      "enum": [
+        "REGISTRADA",
+        "EN_REVISION",
+        "ATENDIDA",
+        "SOLUCIONADA",
+        "CERRADA"
+      ]
+    },
+    "estadoAntena": {
+      "enum": [
+        "NORMAL",
+        "CAIDA",
+        "SATURADA",
+        "INHABILITADA"
+      ]
+    },
+    "fecha": {
+      "type": "string",
+      "format": "date-time"
+    },
     "snapshot": {
       "type": "object",
-      "required": ["zonaId", "clase", "origen"],
+      "required": [
+        "zonaId",
+        "clase",
+        "origen"
+      ],
       "properties": {
-        "zonaId": { "type": "string" },
-        "clase": { "enum": ["INDIVIDUAL", "COLECTIVA"] },
-        "origen": { "enum": ["USUARIO", "ANTENA", "RECURRENCIA"] },
-        "tipo": { "type": ["string", "null"] },
-        "prioridad": { "type": ["number", "null"] },
-        "nivelPrioridad": { "enum": ["P1", "P2", "P3", "P4", null] },
-        "severidadIA": { "enum": ["BAJA", "MEDIA", "ALTA", "CRITICA", null] },
-        "incidenteColectivoId": { "type": ["string", "null"] }
+        "zonaId": {
+          "type": "string"
+        },
+        "clase": {
+          "enum": [
+            "INDIVIDUAL",
+            "COLECTIVA"
+          ]
+        },
+        "origen": {
+          "enum": [
+            "USUARIO",
+            "ANTENA",
+            "RECURRENCIA"
+          ]
+        },
+        "tipo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prioridad": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "nivelPrioridad": {
+          "enum": [
+            "P1",
+            "P2",
+            "P3",
+            "P4",
+            null
+          ]
+        },
+        "severidadIA": {
+          "enum": [
+            "BAJA",
+            "MEDIA",
+            "ALTA",
+            "CRITICA",
+            null
+          ]
+        },
+        "incidenteColectivoId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "Incidencia.CambioEstado": {
       "type": "object",
-      "required": ["incidenciaId", "estadoNuevo", "actor", "ts", "snapshot"],
+      "required": [
+        "incidenciaId",
+        "estadoNuevo",
+        "actor",
+        "ts",
+        "snapshot"
+      ],
       "properties": {
-        "incidenciaId": { "type": "string" },
-        "estadoAnterior": { "oneOf": [{ "$ref": "#/$defs/estadoIncidencia" }, { "type": "null" }] },
-        "estadoNuevo": { "$ref": "#/$defs/estadoIncidencia" },
-        "actor": { "type": "string" },
-        "comentario": { "type": ["string", "null"] },
-        "ts": { "$ref": "#/$defs/fecha" },
-        "snapshot": { "$ref": "#/$defs/snapshot" }
+        "incidenciaId": {
+          "type": "string"
+        },
+        "estadoAnterior": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/estadoIncidencia"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "estadoNuevo": {
+          "$ref": "#/$defs/estadoIncidencia"
+        },
+        "actor": {
+          "type": "string"
+        },
+        "comentario": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "$ref": "#/$defs/fecha"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/snapshot"
+        }
       }
     },
     "Zona.UmbralSuperado": {
       "type": "object",
-      "required": ["zonaId", "incidenteColectivoId", "usuariosDistintos", "ventanaInicio", "ventanaFin", "incidencias"],
+      "required": [
+        "zonaId",
+        "incidenteColectivoId",
+        "usuariosDistintos",
+        "ventanaInicio",
+        "ventanaFin",
+        "incidencias"
+      ],
       "properties": {
-        "zonaId": { "type": "string" },
-        "incidenteColectivoId": { "type": "string" },
-        "usuariosDistintos": { "type": "integer", "minimum": 10 },
-        "ventanaInicio": { "$ref": "#/$defs/fecha" },
-        "ventanaFin": { "$ref": "#/$defs/fecha" },
-        "incidencias": { "type": "array", "items": { "type": "string" } }
+        "zonaId": {
+          "type": "string"
+        },
+        "incidenteColectivoId": {
+          "type": "string"
+        },
+        "usuariosDistintos": {
+          "type": "integer",
+          "minimum": 10
+        },
+        "ventanaInicio": {
+          "$ref": "#/$defs/fecha"
+        },
+        "ventanaFin": {
+          "$ref": "#/$defs/fecha"
+        },
+        "incidencias": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "Antena.CambioEstado": {
       "type": "object",
-      "required": ["antenaId", "zonaId", "estadoNuevo", "gbPorMinuto", "ts"],
+      "required": [
+        "antenaId",
+        "zonaId",
+        "estadoNuevo",
+        "gbPorMinuto",
+        "ts"
+      ],
       "properties": {
-        "antenaId": { "type": "string" },
-        "zonaId": { "type": "string" },
-        "estadoAnterior": { "oneOf": [{ "$ref": "#/$defs/estadoAntena" }, { "type": "null" }] },
-        "estadoNuevo": { "$ref": "#/$defs/estadoAntena" },
-        "gbPorMinuto": { "type": "number", "minimum": 0 },
-        "ts": { "$ref": "#/$defs/fecha" }
+        "antenaId": {
+          "type": "string"
+        },
+        "zonaId": {
+          "type": "string"
+        },
+        "estadoAnterior": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/estadoAntena"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "estadoNuevo": {
+          "$ref": "#/$defs/estadoAntena"
+        },
+        "gbPorMinuto": {
+          "type": "number",
+          "minimum": 0
+        },
+        "ts": {
+          "$ref": "#/$defs/fecha"
+        }
       }
     },
-    "Notificacion.Fallida": {
+    "Notificacion.Solicitada": {
       "type": "object",
-      "required": ["incidenciaId", "estado", "canal", "destino", "mensaje"],
+      "required": [
+        "incidenciaId",
+        "estado",
+        "canal",
+        "destino",
+        "mensaje"
+      ],
       "properties": {
-        "incidenciaId": { "type": "string" },
-        "estado": { "$ref": "#/$defs/estadoIncidencia" },
-        "canal": { "enum": ["SMS", "EMAIL"] },
-        "destino": { "type": "string" },
-        "asunto": { "type": ["string", "null"] },
-        "mensaje": { "type": "string" },
-        "error": { "type": ["string", "null"] }
+        "incidenciaId": {
+          "type": "string"
+        },
+        "estado": {
+          "$ref": "#/$defs/estadoIncidencia"
+        },
+        "canal": {
+          "enum": [
+            "SMS",
+            "EMAIL"
+          ]
+        },
+        "destino": {
+          "type": "string"
+        },
+        "asunto": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mensaje": {
+          "type": "string"
+        }
       }
     }
   }

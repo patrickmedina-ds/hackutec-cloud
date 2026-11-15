@@ -108,3 +108,14 @@ El proyecto quedó en **dos nubes, AWS y Azure** (la cuenta de GCP no tenía fac
 - Analítica: BigQuery y Looker Studio → **Firehose + S3 + Athena** (`aws/stacks/analitica.yaml`) y API `GET /analitica/{reporte}`.
 - Respaldo en otra nube: Cloud Storage → **Azure Blob Storage GRS** (`azure/terraform/respaldo.tf`).
 - Se eliminó el pronóstico con BigQuery ML.
+
+## Cambio de entorno: AWS Academy Learner Lab
+
+La cuenta de AWS es un **Learner Lab** (rol `voclabs`). Restricciones verificadas y decisiones:
+
+| Restricción | Decisión |
+|---|---|
+| No se pueden crear roles IAM | Todas las Lambdas, Step Functions, Pipes, Firehose, Scheduler y reglas usan **`LabRole`**. Cada stack anidado recibe ahora **tres** parámetros: `Stage`, `ComunLayerArn` y `RolLabArn`. |
+| Bedrock denegado | La IA usa **Azure OpenAI** (`gpt-4.1-mini`, despliegue GlobalStandard en `westus`). |
+| Federación saliente de IAM deshabilitada | AWS → Azure con **Cognito Identity Pool** (identidades de desarrollador, emisor `cognito-identity.amazonaws.com`) + credencial federada de Entra ID. Sin llaves guardadas. |
+| SES y SNS SMS denegados | La SFN `ciclo-vida` publica `Notificacion.Solicitada` y **Azure Communication Services** envía el correo (y el SMS si hay número comprado). |

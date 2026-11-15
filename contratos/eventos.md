@@ -7,7 +7,7 @@ Bus: `telecorp-${Stage}-eventos`. Esquema JSON formal en `eventos.schema.json`. 
 | `Incidencia.CambioEstado` | `telecorp.incidencias` | Pipe desde stream de `historial-estados` | SFN `ciclo-vida`, puente |
 | `Zona.UmbralSuperado` | `telecorp.zonas` | Pipe desde stream de `zona-ventana` (marcador) | SFN `colectivo`, puente |
 | `Antena.CambioEstado` | `telecorp.antenas` | Pipe desde stream de `antenas` | SFN `colectivo` (si `estadoNuevo != NORMAL`), puente |
-| `Notificacion.Fallida` | `telecorp.notificaciones` | SFN `ciclo-vida` (Catch) vía `events:PutEvents` | puente → Azure |
+| `Notificacion.Solicitada` | `telecorp.notificaciones` | SFN `ciclo-vida` vía `events:PutEvents` | puente → Azure (`replicar` envía por Communication Services) |
 
 Regla del puente: todos los eventos con `source` con prefijo `telecorp.`.
 
@@ -54,19 +54,18 @@ Regla del puente: todos los eventos con `source` con prefijo `telecorp.`.
 }
 ```
 
-### `Notificacion.Fallida`
+### `Notificacion.Solicitada`
 ```json
 {
   "incidenciaId": "c7a1e0f2-...",
   "estado": "ATENDIDA",
-  "canal": "SMS",
-  "destino": "+51987654321",
+  "canal": "EMAIL",
+  "destino": "usuario@example.com",
   "asunto": "Red TeleCorp: incidencia identificada en tu zona",
-  "mensaje": "Identificamos una falla ...",
-  "error": "SNS.ThrottledException"
+  "mensaje": "Identificamos una falla ..."
 }
 ```
-`canal`: `SMS` | `EMAIL`. Es el **único** evento que lleva PII (destino), porque Azure necesita reenviarlo. El resto de consumidores lo ignora.
+`canal`: `SMS` | `EMAIL`. AWS no envía avisos (el laboratorio bloquea SES y SNS SMS): la SFN `ciclo-vida` publica un evento por canal y Azure Communication Services los envía. Es el **único** evento con PII (destino); la analítica lo excluye.
 
 ## Mensajes al usuario según estado
 

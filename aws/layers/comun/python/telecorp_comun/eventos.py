@@ -9,13 +9,13 @@ from . import nombres
 CAMBIO_ESTADO_INCIDENCIA = "Incidencia.CambioEstado"
 UMBRAL_ZONA = "Zona.UmbralSuperado"
 CAMBIO_ESTADO_ANTENA = "Antena.CambioEstado"
-NOTIFICACION_FALLIDA = "Notificacion.Fallida"
+NOTIFICACION_SOLICITADA = "Notificacion.Solicitada"
 
 SOURCE = {
     CAMBIO_ESTADO_INCIDENCIA: "telecorp.incidencias",
     UMBRAL_ZONA: "telecorp.zonas",
     CAMBIO_ESTADO_ANTENA: "telecorp.antenas",
-    NOTIFICACION_FALLIDA: "telecorp.notificaciones",
+    NOTIFICACION_SOLICITADA: "telecorp.notificaciones",
 }
 
 USUARIOS_UMBRAL_COLECTIVO = 10
