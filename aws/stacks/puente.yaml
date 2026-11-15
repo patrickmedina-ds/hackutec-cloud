@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Red TeleCorp - bloque B. Lambda puente-multinube que replica cada evento telecorp.*
+  del bus a Pub/Sub (GCP) y Event Grid (Azure) como CloudEvents 1.0, con federación
+  de identidades sin llaves guardadas (ver docs/federacion.md).
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedPattern: "^[a-z0-9-]+$"
+  ComunLayerArn:
+    Type: String
+    Description: ARN de la capa telecorp_comun (la crea el stack raíz).
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Cola de mensajes fallidos (eventos que no se pudieron replicar)
+  # ---------------------------------------------------------------------------
+  PuenteDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub telecorp-${Stage}-puente-dlq
+      MessageRetentionPeriod: 1209600 # 14 días
+      SqsManagedSseEnabled: true
+
+  PuenteDLQPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref PuenteDLQ
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # EventBridge deja aquí los eventos que no logra entregar a la Lambda.
+          - Sid: EventBridgeDLQ
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt PuenteDLQ.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt ReglaPuente.Arn
+
+  # ---------------------------------------------------------------------------
+  # Rol de nombre fijo: GCP (attribute.aws_role) y Entra (subject) confían en él.
+  # ---------------------------------------------------------------------------
+  PuenteRol:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub telecorp-${Stage}-puente-multinube-rol
+      Description: Rol de la Lambda puente-multinube (federado con GCP WIF y Entra ID)
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: puente-multinube
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: LeerConfiguracionFederacion
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/gcp/*
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/azure/*
+              - Sid: DescifrarParametrosSeguros
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+              # Federación saliente de IAM: JWT solo para Entra ID, RS256 y máx. 5 min.
+              - Sid: JwtParaEntraId
+                Effect: Allow
+                Action: sts:GetWebIdentityToken
+                Resource: "*"
+                Condition:
+                  ForAllValues:StringEquals:
+                    sts:IdentityTokenAudience: api://AzureADTokenExchange
+                  "Null":
+                    sts:IdentityTokenAudience: "false"
+                  StringEquals:
+                    sts:SigningAlgorithm: RS256
+                  NumericLessThanEquals:
+                    sts:DurationSeconds: 300
+              - Sid: DestinoFallos
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt PuenteDLQ.Arn
+
+  PuenteLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/telecorp-${Stage}-puente-multinube
+      RetentionInDays: 14
+
+  # ---------------------------------------------------------------------------
+  # Lambda
+  # ---------------------------------------------------------------------------
+  PuenteFuncion:
+    Type: AWS::Serverless::Function
+    DependsOn: PuenteLogs
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-puente-multinube
+      Description: Replica eventos telecorp.* a GCP Pub/Sub y Azure Event Grid (CloudEvents 1.0)
+      CodeUri: ../src/puente_multinube/
+      Handler: app.handler
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      MemorySize: 256
+      Timeout: 30
+      Role: !GetAtt PuenteRol.Arn
+      Tracing: Active
+      Layers:
+        - !Ref ComunLayerArn
+      Environment:
+        Variables:
+          STAGE: !Ref Stage
+          BUS_EVENTOS: !Sub telecorp-${Stage}-eventos
+          POWERTOOLS_SERVICE_NAME: puente-multinube
+          DESTINOS: gcp,azure
+          AZURE_ORIGEN_JWT: iam # plan B: cognito (ver docs/federacion.md)
+          GCP_IMPERSONAR: "false" # plan B: "true" usa la cuenta de servicio telecorp-<stage>-puente
+          AWS_STS_REGIONAL_ENDPOINTS: regional
+      # La regla invoca la Lambda de forma asíncrona: si la función lanza error,
+      # Lambda reintenta (2 veces) y luego deja el evento en la DLQ.
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        MaximumEventAgeInSeconds: 3600
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt PuenteDLQ.Arn
+
+  # ---------------------------------------------------------------------------
+  # Regla: todos los eventos con source "telecorp.*" del bus del stack raíz
+  # ---------------------------------------------------------------------------
+  ReglaPuente:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub telecorp-${Stage}-puente-todos
+      Description: Todos los eventos telecorp.* hacia el puente multinube
+      EventBusName: !Sub telecorp-${Stage}-eventos
+      State: ENABLED
+      EventPattern:
+        source:
+          - prefix: telecorp.
+      Targets:
+        - Id: puente-multinube
+          Arn: !GetAtt PuenteFuncion.Arn
+          # Reintentos de EventBridge si no logra entregar el evento a Lambda
+          # (throttling, Lambda no disponible); luego, DLQ.
+          RetryPolicy:
+            MaximumRetryAttempts: 185
+            MaximumEventAgeInSeconds: 86400
+          DeadLetterConfig:
+            Arn: !GetAtt PuenteDLQ.Arn
+
+  PermisoReglaPuente:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PuenteFuncion
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ReglaPuente.Arn
+
+  # ---------------------------------------------------------------------------
+  # Alarmas
+  # ---------------------------------------------------------------------------
+  AlarmaPuenteDLQ:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-puente-dlq-con-mensajes
+      AlarmDescription: !Sub >-
+        Hay eventos que no se replicaron a GCP/Azure tras agotar los reintentos.
+        Revisar logs de telecorp-${Stage}-puente-multinube y redirigir la DLQ.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt PuenteDLQ.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  AlarmaPuenteErrores:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-puente-errores
+      AlarmDescription: La Lambda puente-multinube está fallando (algún destino no responde).
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PuenteFuncion
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  PuenteFuncionArn:
+    Value: !GetAtt PuenteFuncion.Arn
+  PuenteRolArn:
+    Description: Sujeto confiado por GCP WIF y por la credencial federada de Entra ID
+    Value: !GetAtt PuenteRol.Arn
+  PuenteDLQUrl:
+    Value: !Ref PuenteDLQ
+  PuenteDLQArn:
+    Value: !GetAtt PuenteDLQ.Arn

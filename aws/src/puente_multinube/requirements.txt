@@ -1,0 +1,6 @@
+# google-auth: credenciales external_account (Workload Identity Federation, proveedor AWS).
+google-auth>=2.40,<3
+requests>=2.32,<3
+# boto3 empaquetado: el del runtime puede no traer sts:GetWebIdentityToken
+# (federación saliente de IAM, lanzada en noviembre de 2025).
+boto3>=1.42.0
