@@ -1,0 +1,110 @@
+[
+  {
+    "zonaId": "LIM-MIR-01",
+    "nombre": "Miraflores · Malecón y Larcomar",
+    "tipoZona": "RESIDENCIAL",
+    "ciudad": "Lima",
+    "lat": -12.1219,
+    "lon": -77.0297,
+    "usuariosEstimados": 120000
+  },
+  {
+    "zonaId": "LIM-SIS-01",
+    "nombre": "San Isidro · Centro financiero",
+    "tipoZona": "COMERCIAL",
+    "ciudad": "Lima",
+    "lat": -12.0977,
+    "lon": -77.0363,
+    "usuariosEstimados": 65000
+  },
+  {
+    "zonaId": "LIM-SMI-01",
+    "nombre": "San Miguel · Av. La Marina",
+    "tipoZona": "RESIDENCIAL",
+    "ciudad": "Lima",
+    "lat": -12.0770,
+    "lon": -77.0907,
+    "usuariosEstimados": 95000
+  },
+  {
+    "zonaId": "LIM-SJL-01",
+    "nombre": "San Juan de Lurigancho · Centro",
+    "tipoZona": "RESIDENCIAL",
+    "ciudad": "Lima",
+    "lat": -11.9860,
+    "lon": -77.0020,
+    "usuariosEstimados": 430000
+  },
+  {
+    "zonaId": "LIM-VES-01",
+    "nombre": "Villa El Salvador · Sector 1",
+    "tipoZona": "RESIDENCIAL",
+    "ciudad": "Lima",
+    "lat": -12.2116,
+    "lon": -76.9323,
+    "usuariosEstimados": 300000
+  },
+  {
+    "zonaId": "LIM-SJM-01",
+    "nombre": "San Juan de Miraflores · Av. Los Héroes",
+    "tipoZona": "RESIDENCIAL",
+    "ciudad": "Lima",
+    "lat": -12.1555,
+    "lon": -76.9700,
+    "usuariosEstimados": 360000
+  },
+  {
+    "zonaId": "LIM-PLB-01",
+    "nombre": "Pueblo Libre · Ciudad universitaria PUCP",
+    "tipoZona": "EDUCATIVA",
+    "ciudad": "Lima",
+    "lat": -12.0706,
+    "lon": -77.0785,
+    "usuariosEstimados": 40000
+  },
+  {
+    "zonaId": "LIM-JMA-01",
+    "nombre": "Jesús María · Complejo hospitalario Rebagliati",
+    "tipoZona": "MEDICA",
+    "ciudad": "Lima",
+    "lat": -12.0747,
+    "lon": -77.0525,
+    "usuariosEstimados": 55000
+  },
+  {
+    "zonaId": "LIM-ATE-01",
+    "nombre": "Ate · Parque industrial",
+    "tipoZona": "INDUSTRIAL",
+    "ciudad": "Lima",
+    "lat": -12.0371,
+    "lon": -76.9385,
+    "usuariosEstimados": 25000
+  },
+  {
+    "zonaId": "LIM-CAL-01",
+    "nombre": "Callao · Aeropuerto Jorge Chávez",
+    "tipoZona": "CRITICA",
+    "ciudad": "Callao",
+    "lat": -12.0219,
+    "lon": -77.1143,
+    "usuariosEstimados": 30000
+  },
+  {
+    "zonaId": "LIM-LVI-01",
+    "nombre": "La Victoria · Emporio comercial de Gamarra",
+    "tipoZona": "COMERCIAL",
+    "ciudad": "Lima",
+    "lat": -12.0700,
+    "lon": -77.0100,
+    "usuariosEstimados": 150000
+  },
+  {
+    "zonaId": "LIM-COM-01",
+    "nombre": "Comas · Av. Túpac Amaru",
+    "tipoZona": "RESIDENCIAL",
+    "ciudad": "Lima",
+    "lat": -11.9400,
+    "lon": -77.0560,
+    "usuariosEstimados": 510000
+  }
+]
