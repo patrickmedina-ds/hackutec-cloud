@@ -1,0 +1,57 @@
+¿Cómo podemos ayudar a Red TeleCorp?
+"Red TeleCorp" es una empresa de telecomunicaciones que brinda servicios de telefonía móvil, Internet y conectividad a millones de usuarios distribuidos en diferentes ciudades y zonas geográficas. Debido a la gran cantidad de clientes, dispositivos, estaciones base y elementos que forman parte de su infraestructura, mantener la continuidad y calidad del servicio representa uno de los principales desafíos operativos de la organización.
+
+La experiencia de un usuario no depende únicamente de que su dispositivo tenga señal. Una interrupción en una antena, una degradación del servicio, una saturación de la infraestructura o una falla localizada puede afectar llamadas, mensajes, navegación por Internet y otros servicios. En determinadas situaciones, el problema puede afectar solamente a algunos usuarios, mientras que en otras puede impactar a cientos o miles de personas ubicadas dentro de una misma zona.
+
+Actualmente, la empresa recibe información proveniente de diferentes fuentes. Entre ellas se encuentran las métricas generadas por las antenas, los reportes realizados por los usuarios y los registros generados por los sistemas internos. El volumen de información puede crecer considerablemente durante determinados periodos, por lo que resulta necesario contar con mecanismos capaces de procesar estos acontecimientos de manera oportuna.
+
+Como parte del desafío, se plantea que cada antena de la red genere periódicamente información relacionada con la cantidad de tráfico que está procesando. Para efectos de la hackathon, se considera que una antena se encuentra caída cuando registra menos de 60 GB por minuto, mientras que una antena se considera saturada cuando registra más de 129 GB por minuto. Una antena que registra 0 GB por minuto será considerada inhabilitada. Los valores comprendidos entre estos escenarios representan un funcionamiento dentro de los parámetros establecidos para la simulación.
+
+Sin embargo, la información proveniente de las antenas no es la única fuente que debe ser considerada. "Red TeleCorp" también desea mejorar el proceso mediante el cual los propios usuarios pueden reportar problemas relacionados con su servicio.
+
+La empresa solicita la creación de un portal de gestión de incidencias para usuarios, mediante el cual una persona pueda registrar un inconveniente relacionado con su servicio. El usuario deberá poder proporcionar información relevante como su identificación, número asociado al servicio, ubicación aproximada, fecha y hora del inconveniente, tipo de problema y una descripción de lo ocurrido.
+
+Los reportes realizados por los usuarios deberán poder ser consultados y administrados posteriormente. Cada incidencia deberá mantener un estado que permita conocer si se encuentra registrada, en revisión, siendo atendida, solucionada o cerrada. La organización también necesita conservar un historial que permita conocer cómo evolucionó cada incidente.
+
+Uno de los principales problemas que "Red TeleCorp" desea resolver es la detección de incidentes que inicialmente parecen aislados, pero que en realidad corresponden a un problema generalizado.
+
+Por ejemplo, un usuario puede registrar que no tiene conexión a Internet. Posteriormente, otro usuario de la misma zona puede registrar un problema similar. Durante las siguientes horas pueden aparecer nuevos reportes provenientes del mismo sector. Cada reporte individual podría parecer un incidente independiente, pero si se detecta que 10 o más usuarios diferentes reportan un inconveniente relacionado con el servicio dentro de una misma zona en un intervalo menor a 24 horas, la organización deberá considerar que existe un posible incidente colectivo y realizar una verificación de la infraestructura correspondiente.
+
+La empresa desea que los usuarios afectados reciban información sobre el estado del incidente. Cuando se determine que existe una afectación en una determinada zona, los usuarios que hayan reportado el inconveniente deberán poder recibir una comunicación a través de los canales disponibles, como correo electrónico y/o teléfono celular. La comunicación deberá informar que el inconveniente está siendo evaluado, que se ha identificado una incidencia en la zona o que el servicio ha sido restablecido, dependiendo del estado del incidente.
+
+También existe un problema relacionado con la priorización. No todos los incidentes tienen la misma importancia. Una interrupción que afecta a cinco personas no necesariamente requiere la misma atención que una interrupción que afecta a miles de usuarios. De igual manera, una falla localizada en una zona residencial puede tener una prioridad diferente a una interrupción que afecta una zona industrial, una institución educativa, un centro médico o una zona donde se concentran servicios críticos.
+
+"Red TeleCorp" también desea conocer qué zonas presentan mayor cantidad de incidentes, cuáles son las antenas que presentan problemas con mayor frecuencia y qué tipos de inconvenientes son reportados con mayor regularidad. Esta información deberá permitir identificar patrones y apoyar la toma de decisiones de los responsables de la operación.
+
+Otro problema consiste en los incidentes recurrentes. Una determinada antena puede presentar varios problemas durante diferentes días y aparentemente recuperarse después de cada evento. Sin embargo, si estos incidentes se acumulan, podrían indicar que existe un problema estructural que requiere atención especializada.
+
+La empresa también quiere reducir el tiempo entre la aparición de un problema y su identificación. Actualmente, existe el riesgo de que un incidente sea detectado primero por los usuarios antes que por los mecanismos internos de supervisión. La organización busca establecer una relación entre los reportes de los usuarios y el comportamiento registrado en su infraestructura.
+
+Además, la solución deberá considerar escenarios donde se produzcan múltiples incidentes simultáneamente. Una situación como un corte de energía, un evento climático o una falla de infraestructura podría generar una gran cantidad de reportes en pocos minutos. El sistema deberá ser capaz de gestionar estos escenarios sin que el volumen de información provoque una pérdida de registros o una degradación considerable del servicio.
+
+La empresa también desea contar con información histórica. Los responsables deberán poder analizar la evolución de los incidentes, conocer cuánto tiempo permanecieron activos, qué zonas fueron afectadas, cuántos usuarios estuvieron involucrados y qué tan frecuentemente determinados elementos de la infraestructura presentaron problemas.
+
+Finalmente, "Red TeleCorp" busca que la solución tenga el menor costo operativo posible, pueda crecer de acuerdo con el número de usuarios y eventos registrados y no dependa de una infraestructura permanentemente encendida. La organización espera que los participantes analicen cuidadosamente sus decisiones tecnológicas y prioricen una solución eficiente, escalable y sostenible económicamente.
+
+📋 Rúbrica
+Resolver la mayor cantidad de problemas del contexto dado
+Cada dolor del cliente que conviertas en solución real suma. Mientras más problemas derrotes, más brillas.
+
+0-3 pts
+Persistencia y alta disponibilidad de los datos
+0-2 pts
+Uso de Step Functions para automatización
+0-2 pts
+Uso de 2 nubes o más
+0-3 pts
+Arquitectura de la solución
+0-3 pts
+Pitch de 5 minutos vendiendo y explicando rápidamente su idea
+0-2 pts
+Solución completamente serverless
+0-2 pts
+Uso de IA en su solución
+0-3 pts
+TOTAL
+0-20 pts
+

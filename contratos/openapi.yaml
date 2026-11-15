@@ -1,0 +1,216 @@
+openapi: 3.0.3
+info:
+  title: Red TeleCorp · API de incidencias
+  version: 1.0.0
+  description: |
+    Autenticación con Cognito User Pool (JWT en `Authorization`).
+    Grupo `operadores`: acceso a todas las incidencias y a cambiar estados.
+    Usuarios normales: solo sus propias incidencias.
+servers:
+  - url: https://{apiId}.execute-api.us-east-1.amazonaws.com/{stage}
+    variables:
+      apiId: { default: xxxx }
+      stage: { default: dev }
+security:
+  - cognito: []
+paths:
+  /incidencias:
+    post:
+      summary: Registrar un reporte (integración directa a SQS)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NuevoReporte' }
+      responses:
+        '202':
+          description: Aceptado y encolado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  incidenciaId: { type: string }
+                  estado: { type: string, enum: [REGISTRADA] }
+        '400': { $ref: '#/components/responses/Error' }
+    get:
+      summary: Listar incidencias (operador; un usuario normal solo ve las suyas)
+      parameters:
+        - { name: zonaId, in: query, schema: { type: string } }
+        - { name: estado, in: query, schema: { $ref: '#/components/schemas/Estado' } }
+        - { name: clase, in: query, schema: { type: string, enum: [INDIVIDUAL, COLECTIVA] } }
+        - { name: desde, in: query, schema: { type: string, format: date-time } }
+        - { name: limite, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Página de incidencias
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Incidencia' } }
+                  cursor: { type: string, nullable: true }
+  /incidencias/{incidenciaId}:
+    get:
+      summary: Detalle de una incidencia
+      parameters: [ { $ref: '#/components/parameters/IncidenciaId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Incidencia' }
+        '404': { $ref: '#/components/responses/Error' }
+  /incidencias/{incidenciaId}/historial:
+    get:
+      summary: Historial de estados
+      parameters: [ { $ref: '#/components/parameters/IncidenciaId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Transicion' }
+  /incidencias/{incidenciaId}/estado:
+    patch:
+      summary: Cambiar estado (solo operadores)
+      parameters: [ { $ref: '#/components/parameters/IncidenciaId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [estadoNuevo]
+              properties:
+                estadoNuevo: { $ref: '#/components/schemas/Estado' }
+                comentario: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Estado actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Incidencia' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /zonas:
+    get:
+      summary: Catálogo de zonas
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Zona' }
+  /antenas:
+    get:
+      summary: Antenas y su estado actual (operador)
+      parameters:
+        - { name: zonaId, in: query, schema: { type: string } }
+        - { name: estado, in: query, schema: { type: string, enum: [NORMAL, CAIDA, SATURADA, INHABILITADA] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Antena' }
+components:
+  securitySchemes:
+    cognito:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: ID token de Cognito
+  parameters:
+    IncidenciaId:
+      name: incidenciaId
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              codigo: { type: string }
+              mensaje: { type: string }
+  schemas:
+    Estado:
+      type: string
+      enum: [REGISTRADA, EN_REVISION, ATENDIDA, SOLUCIONADA, CERRADA]
+    TipoProblema:
+      type: string
+      enum: [SIN_INTERNET, SIN_LLAMADAS, SIN_SMS, LENTITUD, INTERMITENCIA, OTRO]
+    NuevoReporte:
+      type: object
+      required: [documento, numeroServicio, zonaId, fechaHoraEvento, tipo, descripcion]
+      properties:
+        documento: { type: string, minLength: 6, maxLength: 20 }
+        numeroServicio: { type: string, minLength: 6, maxLength: 20 }
+        telefono: { type: string, description: 'E.164, p. ej. +51987654321' }
+        email: { type: string, format: email }
+        zonaId: { type: string }
+        lat: { type: number }
+        lon: { type: number }
+        fechaHoraEvento: { type: string, format: date-time }
+        tipo: { $ref: '#/components/schemas/TipoProblema' }
+        descripcion: { type: string, maxLength: 1000 }
+    Incidencia:
+      type: object
+      properties:
+        incidenciaId: { type: string }
+        clase: { type: string, enum: [INDIVIDUAL, COLECTIVA] }
+        origen: { type: string, enum: [USUARIO, ANTENA, RECURRENCIA] }
+        estado: { $ref: '#/components/schemas/Estado' }
+        zonaId: { type: string }
+        tipo: { $ref: '#/components/schemas/TipoProblema' }
+        descripcion: { type: string }
+        fechaHoraEvento: { type: string, format: date-time }
+        tipoIA: { type: string, nullable: true }
+        severidadIA: { type: string, enum: [BAJA, MEDIA, ALTA, CRITICA], nullable: true }
+        resumenIA: { type: string, nullable: true }
+        prioridad: { type: number, nullable: true }
+        nivelPrioridad: { type: string, enum: [P1, P2, P3, P4], nullable: true }
+        incidenteColectivoId: { type: string, nullable: true }
+        usuariosAfectados: { type: integer, nullable: true }
+        antenasAfectadas: { type: array, items: { type: string }, nullable: true }
+        creadoEn: { type: string, format: date-time }
+        actualizadoEn: { type: string, format: date-time }
+        resueltoEn: { type: string, format: date-time, nullable: true }
+    Transicion:
+      type: object
+      properties:
+        estadoAnterior: { $ref: '#/components/schemas/Estado' }
+        estadoNuevo: { $ref: '#/components/schemas/Estado' }
+        actor: { type: string }
+        comentario: { type: string, nullable: true }
+        ts: { type: string, format: date-time }
+    Zona:
+      type: object
+      properties:
+        zonaId: { type: string }
+        nombre: { type: string }
+        tipoZona: { type: string, enum: [RESIDENCIAL, COMERCIAL, EDUCATIVA, INDUSTRIAL, MEDICA, CRITICA] }
+        ciudad: { type: string }
+        lat: { type: number }
+        lon: { type: number }
+    Antena:
+      type: object
+      properties:
+        antenaId: { type: string }
+        zonaId: { type: string }
+        estado: { type: string, enum: [NORMAL, CAIDA, SATURADA, INHABILITADA] }
+        gbPorMinuto: { type: number }
+        ultimaLectura: { type: string, format: date-time }
