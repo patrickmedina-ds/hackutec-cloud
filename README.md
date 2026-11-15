@@ -14,6 +14,20 @@ Plataforma **100 % serverless** para que Red TeleCorp reciba, priorice y atienda
 - **Histórico y analítica:** todos los eventos llegan a S3 por Firehose y se consultan con vistas de Athena; el operador ve los reportes en el portal (`GET /analitica/{reporte}`).
 - **IA:** Amazon Bedrock clasifica el tipo y la severidad de cada reporte, resume los incidentes colectivos y redacta los avisos. Si la IA falla o tarda más de 8 s, reglas locales toman el relevo.
 
+
+## Entorno desplegado (stage `dev`)
+
+| Qué | URL |
+|---|---|
+| Portal (usuario y operador) | https://green-glacier-0a847041e.4.azurestaticapps.net/ |
+| Página de estado pública | https://victorious-river-026920e1e.5.azurestaticapps.net |
+| API REST | https://v8wh8zzm8e.execute-api.us-east-1.amazonaws.com/dev |
+| Diagrama | Entregado aparte (draw.io) |
+
+El guion del pitch y la demo en vivo están en [docs/pitch.md](docs/pitch.md).
+
+Entorno real: AWS Academy Learner Lab (todo usa `LabRole`; sin CloudFront, Bedrock, SES ni SNS SMS) y una suscripción personal de Azure. Por eso el portal se aloja en Azure Static Web Apps, la IA es Azure OpenAI y los avisos salen por Azure Communication Services.
+
 ## Arquitectura
 
 AWS recibe los reportes y la telemetría, detecta los incidentes y los orquesta con **Step Functions**. Los cambios de estado salen de DynamoDB por Streams hacia **EventBridge**, y de ahí parten la analítica en Athena y la réplica a Azure. Ningún componente escribe directamente en otro.
