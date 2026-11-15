@@ -13,6 +13,9 @@ Parameters:
   ComunLayerArn:
     Type: String
     Description: ARN de la capa telecorp_comun (la crea el stack raíz).
+  RolLabArn:
+    Type: String
+    Description: ARN del rol LabRole (Learner Lab) para Lambdas, Firehose y la regla de EventBridge.
 
 Resources:
   # ---------------------------------------------------------------------------
@@ -77,7 +80,7 @@ Resources:
                 aws:SecureTransport: "false"
 
   # ---------------------------------------------------------------------------
-  # Firehose: eventos telecorp.* (sin Notificacion.Fallida, lleva PII) -> S3
+  # Firehose: eventos telecorp.* (sin Notificacion.Solicitada, lleva PII) -> S3
   # ---------------------------------------------------------------------------
   FirehoseLogs:
     Type: AWS::Logs::LogGroup
@@ -91,40 +94,6 @@ Resources:
       LogGroupName: !Ref FirehoseLogs
       LogStreamName: entrega-s3
 
-  FirehoseRol:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub telecorp-${Stage}-analitica-firehose-rol
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: firehose.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                sts:ExternalId: !Ref AWS::AccountId
-      Policies:
-        - PolicyName: entrega-s3
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:AbortMultipartUpload
-                  - s3:GetBucketLocation
-                  - s3:GetObject
-                  - s3:ListBucket
-                  - s3:ListBucketMultipartUploads
-                  - s3:PutObject
-                Resource:
-                  - !GetAtt BucketAnalitica.Arn
-                  - !Sub ${BucketAnalitica.Arn}/*
-              - Effect: Allow
-                Action: logs:PutLogEvents
-                Resource: !GetAtt FirehoseLogs.Arn
-
   FirehoseEventos:
     Type: AWS::KinesisFirehose::DeliveryStream
     Properties:
@@ -134,7 +103,7 @@ Resources:
         KeyType: AWS_OWNED_CMK
       ExtendedS3DestinationConfiguration:
         BucketARN: !GetAtt BucketAnalitica.Arn
-        RoleARN: !GetAtt FirehoseRol.Arn
+        RoleARN: !Ref RolLabArn
         # El esquema de partición debe coincidir con la proyección de la tabla Glue.
         Prefix: eventos/tipo=!{partitionKeyFromQuery:tipo}/anio=!{partitionKeyFromQuery:anio}/mes=!{partitionKeyFromQuery:mes}/dia=!{partitionKeyFromQuery:dia}/
         ErrorOutputPrefix: errores/!{firehose:error-output-type}/!{timestamp:yyyy/MM/dd}/
@@ -166,36 +135,11 @@ Resources:
           LogGroupName: !Ref FirehoseLogs
           LogStreamName: !Ref FirehoseLogsStream
 
-  EventosAFirehoseRol:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub telecorp-${Stage}-analitica-eventos-rol
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: events.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-      Policies:
-        - PolicyName: poner-registros
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - firehose:PutRecord
-                  - firehose:PutRecordBatch
-                Resource: !GetAtt FirehoseEventos.Arn
-
   ReglaAnalitica:
     Type: AWS::Events::Rule
     Properties:
       Name: !Sub telecorp-${Stage}-analitica-eventos
-      Description: Eventos telecorp.* al lago de analítica (excluye Notificacion.Fallida por PII)
+      Description: Eventos telecorp.* al lago de analítica (excluye Notificacion.Solicitada por PII)
       EventBusName: !Sub telecorp-${Stage}-eventos
       State: ENABLED
       EventPattern:
@@ -203,11 +147,11 @@ Resources:
           - prefix: telecorp.
         detail-type:
           - anything-but:
-              - Notificacion.Fallida
+              - Notificacion.Solicitada
       Targets:
         - Id: firehose-eventos
           Arn: !GetAtt FirehoseEventos.Arn
-          RoleArn: !GetAtt EventosAFirehoseRol.Arn
+          RoleArn: !Ref RolLabArn
 
   # ---------------------------------------------------------------------------
   # Glue + Athena
@@ -265,7 +209,7 @@ Resources:
             - { Name: detail_type, Type: string }
             - { Name: source, Type: string }
             - { Name: time, Type: string }
-            # Unión de los `detail` de eventos.schema.json (Notificacion.Fallida no se almacena).
+            # Unión de los `detail` de eventos.schema.json (Notificacion.Solicitada no se almacena).
             - Name: detail
               Type: >-
                 struct<incidenciaId:string,estadoAnterior:string,estadoNuevo:string,actor:string,comentario:string,ts:string,snapshot:struct<zonaId:string,clase:string,origen:string,tipo:string,prioridad:double,nivelPrioridad:string,severidadIA:string,incidenteColectivoId:string>,antenaId:string,zonaId:string,gbPorMinuto:double,incidenteColectivoId:string,usuariosDistintos:int,ventanaInicio:string,ventanaFin:string,incidencias:array<string>>
@@ -291,56 +235,6 @@ Resources:
   # ---------------------------------------------------------------------------
   # Vistas: se crean al desplegar con una custom resource (ver aws/analitica/README.md)
   # ---------------------------------------------------------------------------
-  VistasRol:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub telecorp-${Stage}-analitica-vistas-rol
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-      ManagedPolicyArns:
-        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: crear-vistas
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - athena:StartQueryExecution
-                  - athena:GetQueryExecution
-                  - athena:GetQueryResults
-                Resource: !Sub arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${GrupoTrabajoAthena}
-              - Effect: Allow
-                Action:
-                  - glue:GetDatabase
-                  - glue:GetTable
-                  - glue:GetTables
-                  - glue:GetPartitions
-                  - glue:CreateTable
-                  - glue:UpdateTable
-                  - glue:DeleteTable
-                Resource:
-                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog
-                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/${BaseDatos}
-                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:table/${BaseDatos}/*
-              - Effect: Allow
-                Action:
-                  - s3:GetBucketLocation
-                  - s3:ListBucket
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource:
-                  - !GetAtt BucketAnalitica.Arn
-                  - !Sub ${BucketAnalitica.Arn}/*
-
   VistasFuncion:
     Type: AWS::Serverless::Function
     Properties:
@@ -353,7 +247,7 @@ Resources:
         - arm64
       MemorySize: 256
       Timeout: 900
-      Role: !GetAtt VistasRol.Arn
+      Role: !Ref RolLabArn
 
   Vistas:
     Type: Custom::VistasAthena
@@ -369,54 +263,6 @@ Resources:
   # ---------------------------------------------------------------------------
   # Lambda de reportes para el panel del operador (la enruta el stack raíz)
   # ---------------------------------------------------------------------------
-  ApiAnaliticaRol:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub telecorp-${Stage}-api-analitica-rol
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-      ManagedPolicyArns:
-        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: consultar-athena
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - athena:StartQueryExecution
-                  - athena:GetQueryExecution
-                  - athena:GetQueryResults
-                Resource: !Sub arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${GrupoTrabajoAthena}
-              - Effect: Allow
-                Action:
-                  - glue:GetDatabase
-                  - glue:GetTable
-                  - glue:GetPartitions
-                Resource:
-                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog
-                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/${BaseDatos}
-                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:table/${BaseDatos}/*
-              - Effect: Allow
-                Action:
-                  - s3:GetBucketLocation
-                  - s3:ListBucket
-                  - s3:GetObject
-                Resource:
-                  - !GetAtt BucketAnalitica.Arn
-                  - !Sub ${BucketAnalitica.Arn}/*
-              - Effect: Allow
-                Action: s3:PutObject
-                Resource: !Sub ${BucketAnalitica.Arn}/athena-resultados/*
-
   ApiAnaliticaFuncion:
     Type: AWS::Serverless::Function
     DependsOn: Vistas
@@ -430,7 +276,7 @@ Resources:
         - arm64
       MemorySize: 256
       Timeout: 29
-      Role: !GetAtt ApiAnaliticaRol.Arn
+      Role: !Ref RolLabArn
       Layers:
         - !Ref ComunLayerArn
       Environment:

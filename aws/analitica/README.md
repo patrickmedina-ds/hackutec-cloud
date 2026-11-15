@@ -10,7 +10,7 @@ Bus telecorp-<stage>-eventos --regla--> Firehose --> S3 (eventos/tipo=/anio=/mes
                                      Lambda api-analitica --> API Gateway GET /analitica/{reporte}
 ```
 
-- Entran todos los eventos `telecorp.*` **menos** `Notificacion.Fallida` (lleva teléfono/correo: PII).
+- Entran todos los eventos `telecorp.*` **menos** `Notificacion.Solicitada` (lleva teléfono/correo: PII).
 - Latencia: ~60 s (buffer de Firehose) más la entrega a S3.
 - Recursos: bucket `telecorp-<stage>-analitica-<cuenta>`, base Glue `telecorp_<stage>`,
   workgroup Athena `telecorp-<stage>` (tope de 1 GB escaneado por consulta).

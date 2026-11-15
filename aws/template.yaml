@@ -34,6 +34,10 @@ Parameters:
     Type: Number
     Default: 100
     Description: Ráfaga máxima de la etapa de la API
+  RolLabNombre:
+    Type: String
+    Default: LabRole
+    Description: Rol del Learner Lab (no se pueden crear roles IAM); lo usan Lambdas, SFN, Pipes, Firehose, Scheduler, IoT y API Gateway
 
 Conditions:
   HayUrlsAdicionales: !Not [!Equals [!Join ['', !Ref UrlsPortalAdicionales], '']]
@@ -204,6 +208,7 @@ Resources:
       Handler: app.lambda_handler
       MemorySize: 128
       Timeout: 10
+      Role: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
       Environment:
         Variables:
           POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-pipe-enriquecer
@@ -215,45 +220,12 @@ Resources:
       MessageRetentionPeriod: 1209600
       SqsManagedSseEnabled: true
 
-  RolPipes:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub telecorp-${Stage}-pipes-${AWS::Region}
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: { Service: pipes.amazonaws.com }
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals: { 'aws:SourceAccount': !Ref 'AWS::AccountId' }
-      Policies:
-        - PolicyName: pipes
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: [dynamodb:DescribeStream, dynamodb:GetRecords, dynamodb:GetShardIterator, dynamodb:ListStreams]
-                Resource:
-                  - !GetAtt TablaHistorial.StreamArn
-                  - !GetAtt TablaZonaVentana.StreamArn
-                  - !GetAtt TablaAntenas.StreamArn
-              - Effect: Allow
-                Action: lambda:InvokeFunction
-                Resource: !GetAtt PipeEnriquecer.Arn
-              - Effect: Allow
-                Action: events:PutEvents
-                Resource: !GetAtt BusEventos.Arn
-              - Effect: Allow
-                Action: sqs:SendMessage
-                Resource: !GetAtt PipesDlq.Arn
-
   PipeHistorial:
     Type: AWS::Pipes::Pipe
     Properties:
       Name: !Sub telecorp-${Stage}-pipe-historial
       Description: historial-estados (INSERT) -> Incidencia.CambioEstado
-      RoleArn: !GetAtt RolPipes.Arn
+      RoleArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
       DesiredState: RUNNING
       Source: !GetAtt TablaHistorial.StreamArn
       SourceParameters:
@@ -278,7 +250,7 @@ Resources:
     Properties:
       Name: !Sub telecorp-${Stage}-pipe-zona-umbral
       Description: zona-ventana (INSERT del marcador COLECTIVO_ACTIVO) -> Zona.UmbralSuperado
-      RoleArn: !GetAtt RolPipes.Arn
+      RoleArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
       DesiredState: RUNNING
       Source: !GetAtt TablaZonaVentana.StreamArn
       SourceParameters:
@@ -303,7 +275,7 @@ Resources:
     Properties:
       Name: !Sub telecorp-${Stage}-pipe-antenas
       Description: antenas (MODIFY) -> Antena.CambioEstado
-      RoleArn: !GetAtt RolPipes.Arn
+      RoleArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
       DesiredState: RUNNING
       Source: !GetAtt TablaAntenas.StreamArn
       SourceParameters:
@@ -425,24 +397,6 @@ Resources:
       UserPoolId: !Ref UserPool
 
   # ------------------------------------------------------------------ API Gateway
-  RolApiSqs:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: { Service: apigateway.amazonaws.com }
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: enviar-reportes
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: sqs:SendMessage
-                Resource: !GetAtt ColaReportes.Arn
-
   Api:
     Type: AWS::Serverless::Api
     Properties:
@@ -517,7 +471,7 @@ Resources:
                 type: aws
                 httpMethod: POST
                 uri: !Sub arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${ColaReportes.QueueName}
-                credentials: !GetAtt RolApiSqs.Arn
+                credentials: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
                 passthroughBehavior: never
                 requestParameters:
                   integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
@@ -705,16 +659,7 @@ Resources:
       Environment:
         Variables:
           POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-registrar-reporte
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:ConditionCheckItem]
-              Resource:
-                - !GetAtt TablaIncidencias.Arn
-                - !GetAtt TablaHistorial.Arn
-            - Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:Query]
-              Resource: !GetAtt TablaZonaVentana.Arn
+      Role: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
       Events:
         Reportes:
           Type: SQS
@@ -737,24 +682,7 @@ Resources:
       Environment:
         Variables:
           POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-api-incidencias
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:Scan]
-              Resource:
-                - !GetAtt TablaIncidencias.Arn
-                - !Sub ${TablaIncidencias.Arn}/index/*
-                - !GetAtt TablaZonas.Arn
-                - !GetAtt TablaAntenas.Arn
-                - !Sub ${TablaAntenas.Arn}/index/*
-            - Effect: Allow
-              Action: [dynamodb:Query]
-              Resource: !GetAtt TablaHistorial.Arn
-            - Effect: Allow
-              Action: [dynamodb:UpdateItem, dynamodb:PutItem, dynamodb:ConditionCheckItem]
-              Resource:
-                - !GetAtt TablaIncidencias.Arn
-                - !GetAtt TablaHistorial.Arn
+      Role: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
 
   PermisoApiIncidencias:
     Type: AWS::Lambda::Permission
@@ -782,26 +710,6 @@ Resources:
         EncryptionType: KMS
         KeyId: alias/aws/kinesis
 
-  RolIotKinesis:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: { Service: iot.amazonaws.com }
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals: { 'aws:SourceAccount': !Ref 'AWS::AccountId' }
-      Policies:
-        - PolicyName: escribir-telemetria
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: kinesis:PutRecord
-                Resource: !GetAtt StreamTelemetria.Arn
-
   ReglaIotTelemetria:
     Type: AWS::IoT::TopicRule
     Properties:
@@ -815,7 +723,7 @@ Resources:
           - Kinesis:
               StreamName: !Ref StreamTelemetria
               PartitionKey: ${antenaId}
-              RoleArn: !GetAtt RolIotKinesis.Arn
+              RoleArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
 
   FuncionEvaluarAntena:
     Type: AWS::Serverless::Function
@@ -828,17 +736,7 @@ Resources:
       Environment:
         Variables:
           POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-evaluar-antena
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action: [dynamodb:PutItem]
-              Resource: !GetAtt TablaMetricas.Arn
-            - Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
-              Resource: !GetAtt TablaAntenas.Arn
-            - Effect: Allow
-              Action: sqs:SendMessage
-              Resource: !GetAtt ColaTelemetriaDlq.Arn
+      Role: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
       Events:
         Telemetria:
           Type: Kinesis
@@ -1079,6 +977,7 @@ Resources:
       Parameters:
         Stage: !Ref Stage
         ComunLayerArn: !Ref ComunLayer
+        RolLabArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
 
   StackPuente:
     Type: AWS::Serverless::Application
@@ -1095,6 +994,7 @@ Resources:
       Parameters:
         Stage: !Ref Stage
         ComunLayerArn: !Ref ComunLayer
+        RolLabArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
 
   StackIa:
     Type: AWS::Serverless::Application
@@ -1111,6 +1011,7 @@ Resources:
       Parameters:
         Stage: !Ref Stage
         ComunLayerArn: !Ref ComunLayer
+        RolLabArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
 
   Analitica:
     Type: AWS::Serverless::Application
@@ -1121,6 +1022,7 @@ Resources:
       Parameters:
         Stage: !Ref Stage
         ComunLayerArn: !Ref ComunLayer
+        RolLabArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
 
   PermisoApiAnalitica:
     Type: AWS::Lambda::Permission

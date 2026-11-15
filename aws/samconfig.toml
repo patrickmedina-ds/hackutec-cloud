@@ -13,7 +13,7 @@ lint = true
 [default.deploy.parameters]
 stack_name = "telecorp-dev"
 region = "us-east-1"
-capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND"
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 confirm_changeset = false
 resolve_s3 = true
 fail_on_empty_changeset = false

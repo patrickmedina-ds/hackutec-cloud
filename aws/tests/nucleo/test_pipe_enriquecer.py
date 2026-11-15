@@ -105,7 +105,7 @@ def test_valores_contra_el_modulo_real_de_la_capa(app):
 
     plantilla = (RAIZ_AWS / "template.yaml").read_text()
     for detail_type, source in eventos.SOURCE.items():
-        if detail_type == eventos.NOTIFICACION_FALLIDA:
+        if detail_type == eventos.NOTIFICACION_SOLICITADA:
             continue  # no sale de un Pipe
         assert f"DetailType: {detail_type}" in plantilla
         assert f"Source: {source}" in plantilla

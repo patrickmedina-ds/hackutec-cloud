@@ -49,7 +49,7 @@ def _asl(propiedades):
 
 
 def test_parametros_exactos(template):
-    assert set(template["Parameters"]) == {"Stage", "ComunLayerArn"}
+    assert set(template["Parameters"]) == {"Stage", "ComunLayerArn", "RolLabArn"}
 
 
 def test_tres_maquinas_con_nombres_del_contrato(maquinas):
@@ -116,21 +116,66 @@ def test_asl_valido_y_sustituciones_definidas(archivo, maquinas):
             assert EXPRESION.match(cadena), f"Expresión JSONata mal delimitada: {cadena}"
 
 
-def test_reglas_de_eventbridge(maquinas):
-    ciclo = next(p for p in maquinas.values() if p["Type"] == "EXPRESS")
-    patron = ciclo["Events"]["CambioEstadoIndividual"]["Properties"]["Pattern"]
+def _reglas(template):
+    return {r["Properties"]["Name"]["Sub"]: r["Properties"] for r in template["Resources"].values()
+            if r["Type"] == "AWS::Events::Rule"}
+
+
+def test_reglas_de_eventbridge(template, maquinas):
+    reglas = _reglas(template)
+    patron = reglas["telecorp-${Stage}-ciclo-vida"]["EventPattern"]
     assert patron["detail-type"] == ["Incidencia.CambioEstado"]
     assert patron["detail"]["snapshot"]["clase"] == ["INDIVIDUAL"]
     assert "CERRADA" not in patron["detail"]["estadoNuevo"]
 
-    colectivo = next(p for p in maquinas.values() if p["Name"]["Sub"].endswith("colectivo"))
-    tipos = {e["Properties"]["Pattern"]["detail-type"][0] for e in colectivo["Events"].values()}
+    tipos = {reglas[n]["EventPattern"]["detail-type"][0]
+             for n in ("telecorp-${Stage}-colectivo-umbral", "telecorp-${Stage}-colectivo-antena")}
     assert tipos == {"Zona.UmbralSuperado", "Antena.CambioEstado"}
+    for regla in reglas.values():
+        (destino,) = regla["Targets"]
+        assert destino["RoleArn"] == {"Ref": "RolLabArn"}
+        assert "DeadLetterConfig" in destino
 
     recurrencia = next(p for p in maquinas.values() if p["Name"]["Sub"].endswith("recurrencia"))
     horario = recurrencia["Events"]["Diario"]["Properties"]
     assert horario["ScheduleExpression"] == "cron(0 2 * * ? *)"
     assert horario["ScheduleExpressionTimezone"] == "America/Lima"
+    assert horario["RoleArn"] == {"Ref": "RolLabArn"}
+
+
+def test_todo_usa_labrole(template):
+    for nombre, recurso in template["Resources"].items():
+        assert not recurso["Type"].startswith("AWS::IAM::"), nombre
+        if recurso["Type"] in ("AWS::Serverless::Function", "AWS::Serverless::StateMachine"):
+            assert recurso["Properties"]["Role"] == {"Ref": "RolLabArn"}, nombre
+            assert "Policies" not in recurso["Properties"], nombre
+
+
+def _ciclo_vida():
+    return json.loads((RAIZ_AWS / "statemachines" / "ciclo_vida.asl.json").read_text())
+
+
+def test_ciclo_vida_publica_notificacion_solicitada():
+    texto = (RAIZ_AWS / "statemachines" / "ciclo_vida.asl.json").read_text()
+    assert "sns:publish" not in texto and "sesv2" not in texto and "ssm:" not in texto
+    assert "Notificacion.Fallida" not in texto
+    notificar = _ciclo_vida()["States"]["Notificar"]
+    assert notificar["Resource"] == "arn:aws:states:::events:putEvents"
+    entradas = notificar["Arguments"]["Entries"]
+    assert entradas.count("'DetailType': 'Notificacion.Solicitada'") == 2
+    assert entradas.count("'Source': 'telecorp.notificaciones'") == 2
+    assert "'canal': 'SMS', 'destino': $telefono" in entradas
+    assert "'canal': 'EMAIL', 'destino': $email" in entradas
+    for campo in ("incidenciaId", "estado", "canal", "destino", "asunto", "mensaje"):
+        assert entradas.count(f"'{campo}':") == 2
+
+
+def test_ciclo_vida_redacta_con_ia_y_respaldo():
+    redactar = _ciclo_vida()["States"]["RedactarAviso"]
+    assert redactar["Arguments"]["Payload"]["accion"] == "REDACTAR_AVISO"
+    assert redactar["Next"] == "Notificar"
+    assert redactar["Catch"][0]["Next"] == "Notificar"
+    assert "El servicio fue restablecido." in redactar["Catch"][0]["Assign"]["mensaje"]
 
 
 def test_lambdas_usan_la_capa_comun(template):
