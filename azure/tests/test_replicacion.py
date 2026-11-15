@@ -4,11 +4,12 @@ from jsonschema import ValidationError
 from conftest import (NotificadorFalso, antena, cloudevent, incidencia, notificacion,
                       validar_detail)
 from telecorp_azure import estado_api
+from telecorp_azure.notificador_acs import NotificadorACS, construir_html
 from telecorp_azure.replicacion import (cargar_cloudevent, procesar_evento, recortar_sms)
 
 INC = "Incidencia.CambioEstado"
 ANT = "Antena.CambioEstado"
-NOT = "Notificacion.Fallida"
+NOT = "Notificacion.Solicitada"
 
 
 def test_esquema_rechaza_evento_invalido():
@@ -114,7 +115,7 @@ def test_notificacion_sms_y_correo(repo, notificador):
     assert repo.zonas == {}  # los avisos no tocan Cosmos DB
 
 
-def test_notificacion_fallida_libera_marca_para_reintento(repo):
+def test_notificacion_con_fallo_libera_marca_para_reintento(repo):
     ev = cloudevent(NOT, notificacion("EMAIL"), "n1")
     with pytest.raises(RuntimeError):
         procesar_evento(ev, repo, NotificadorFalso(falla=True))
@@ -156,3 +157,47 @@ def test_api_estado_proyeccion(repo, notificador):
     assert "antenas" not in lista["zonas"][0] and "_etag" not in lista["zonas"][0]
     assert estado_api.detalle(repo, "LIM-SMP-01")["estado"] == "en_evaluacion"
     assert estado_api.detalle(repo, "NO-EXISTE") is None
+
+
+def test_sms_sin_remitente_se_da_por_resuelto(repo, caplog):
+    n = NotificadorFalso(sms_habilitado=False)
+    ev = cloudevent(NOT, notificacion("SMS"), "n1")
+    with caplog.at_level("WARNING"):
+        r = procesar_evento(ev, repo, n)
+    assert r["resultado"] == "sms_omitido_sin_remitente"
+    assert n.enviados == [] and "SMS omitido" in caplog.text
+    assert procesar_evento(ev, repo, n)["resultado"] == "duplicado"  # no se reintenta
+
+
+def test_html_del_correo():
+    h = construir_html("Asunto <b>", "Línea 1\nLínea 2", "inc-1", "ATENDIDA")
+    assert "Incidencia identificada" in h and "inc-1" in h and "Asunto &lt;b&gt;" in h
+    assert "<br>" in h
+    assert "En evaluación" in construir_html("a", "m", "i", "REGISTRADA")
+    assert "Servicio restablecido" in construir_html("a", "m", "i", "SOLUCIONADA")
+
+
+def test_acs_correo_incluye_html_y_texto(monkeypatch):
+    import sys, types
+    enviados = []
+
+    class Poller:
+        def result(self):
+            return {"status": "Succeeded"}
+
+    class EmailClient:
+        def begin_send(self, msg):
+            enviados.append(msg)
+            return Poller()
+
+    mod = types.ModuleType("azure.communication.email")
+    mod.EmailClient = EmailClient
+    monkeypatch.setitem(sys.modules, "azure.communication.email", mod)
+    monkeypatch.setenv("ACS_EMAIL_REMITENTE", "no-responder@x.azurecomm.net")
+    n = NotificadorACS()
+    monkeypatch.setattr(n, "_cliente", lambda c: c())
+    assert n.sms_habilitado is False
+    n.enviar("EMAIL", "a@b.c", "Asunto", "Hola", incidencia_id="inc-1", estado="ATENDIDA")
+    c = enviados[0]["content"]
+    assert c["plainText"] == "Hola" and "Incidencia identificada" in c["html"]
+    assert enviados[0]["senderAddress"] == "no-responder@x.azurecomm.net"

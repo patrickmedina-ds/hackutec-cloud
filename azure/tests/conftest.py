@@ -56,11 +56,12 @@ class RepoFalso:
 
 
 class NotificadorFalso:
-    def __init__(self, falla=False):
+    def __init__(self, falla=False, sms_habilitado=True):
         self.enviados = []
         self.falla = falla
+        self.sms_habilitado = sms_habilitado
 
-    def enviar(self, canal, destino, asunto, mensaje):
+    def enviar(self, canal, destino, asunto, mensaje, incidencia_id=None, estado=None):
         if self.falla:
             raise RuntimeError("ACS caído")
         self.enviados.append((canal, destino, asunto, mensaje))
@@ -112,7 +113,7 @@ def notificacion(canal="SMS", **extra) -> dict:
     base = {"incidenciaId": "inc-1", "estado": "ATENDIDA", "canal": canal,
             "destino": "+51987654321" if canal == "SMS" else "ana@example.com",
             "asunto": "Red TeleCorp: incidencia identificada en tu zona",
-            "mensaje": "Identificamos una falla en tu zona.", "error": "SNS.ThrottledException"}
+            "mensaje": "Identificamos una falla en tu zona."}
     base.update(extra)
     return base
 
