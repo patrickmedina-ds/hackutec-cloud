@@ -4,7 +4,7 @@ import json
 
 import boto3
 import pytest
-from apoyo_puente import ConfigFalsa, CredencialesFalsas, Respuesta
+from apoyo_puente import ConfigFalsa, Respuesta
 from botocore.stub import Stubber
 from configuracion import Configuracion, ConfiguracionFaltante, nombre_parametro
 from destino_azure import (
@@ -14,7 +14,6 @@ from destino_azure import (
     ProveedorTokenEntra,
     jwt_iam_saliente,
 )
-from destino_gcp import PublicadorPubSub
 from moto import mock_aws
 
 CE = {"specversion": "1.0", "id": "x", "source": "telecorp/aws/telecorp.zonas", "type": "Zona.UmbralSuperado",
@@ -76,69 +75,6 @@ def test_jwt_iam_saliente_pide_rs256_y_audiencia_de_entra():
         assert jwt_iam_saliente(sts) == "eyJ.jwt.firma"
 
 
-# --- GCP ----------------------------------------------------------------------------------------
-def test_credenciales_gcp_se_crean_y_refrescan_una_vez(http):
-    creadas = []
-
-    def fabrica(info):
-        creadas.append(info)
-        return CredencialesFalsas()
-
-    pubsub = PublicadorPubSub(ConfigFalsa(), http, fabrica_credenciales=fabrica, fabrica_request=lambda: object())
-    for _ in range(3):
-        pubsub.publicar({"data": "e30=", "attributes": {}})
-    assert len(creadas) == 1
-    assert pubsub._credenciales.refrescos == 1
-    assert {c["headers"]["Authorization"] for c in http.a("pubsub")} == {"Bearer token-gcp-1"}
-
-
-def test_credenciales_gcp_se_refrescan_al_expirar(http):
-    pubsub = PublicadorPubSub(ConfigFalsa(), http, fabrica_credenciales=lambda info: CredencialesFalsas(),
-                              fabrica_request=lambda: object())
-    pubsub.publicar({"data": "e30=", "attributes": {}})
-    pubsub._credenciales.valid = False  # google-auth marca inválido el token próximo a expirar
-    pubsub.publicar({"data": "e30=", "attributes": {}})
-    assert pubsub._credenciales.refrescos == 2
-
-
-def test_impersonacion_opcional_de_cuenta_de_servicio(http, monkeypatch):
-    monkeypatch.setenv("GCP_IMPERSONAR", "true")
-    recibido = {}
-    pubsub = PublicadorPubSub(ConfigFalsa(), http,
-                              fabrica_credenciales=lambda info: recibido.update(info) or CredencialesFalsas(),
-                              fabrica_request=lambda: object())
-    pubsub.publicar({"data": "e30=", "attributes": {}})
-    assert recibido["service_account_impersonation_url"].endswith(
-        "serviceAccounts/telecorp-test-puente@telecorp-proyecto.iam.gserviceaccount.com:generateAccessToken"
-    )
-
-
-def test_google_auth_acepta_la_configuracion_de_terraform(monkeypatch):
-    """El JSON que genera gcp/terraform/federacion.tf produce credenciales aws de google-auth."""
-    pytest.importorskip("google.auth")
-    import destino_gcp
-    from google.auth import aws
-
-    info = {
-        "universe_domain": "googleapis.com",
-        "type": "external_account",
-        "audience": "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/telecorp-test-aws/providers/aws",
-        "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
-        "token_url": "https://sts.googleapis.com/v1/token",
-        "credential_source": {
-            "environment_id": "aws1",
-            "region_url": "http://169.254.169.254/latest/meta-data/placement/availability-zone",
-            "url": "http://169.254.169.254/latest/meta-data/iam/security-credentials",
-            "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15",
-        },
-        "quota_project_id": "telecorp-proyecto",
-    }
-    credenciales = destino_gcp._crear_credenciales(json.loads(json.dumps(info)))
-    assert isinstance(credenciales, aws.Credentials)
-    assert credenciales.quota_project_id == "telecorp-proyecto"
-    assert not credenciales.valid
-
-
 # --- SSM ------------------------------------------------------------------------------------------
 def test_configuracion_se_cachea_por_ttl():
     reloj = Reloj()
@@ -151,7 +87,7 @@ def test_configuracion_se_cachea_por_ttl():
 
         assert config.obtener("azure_tenant_id") == "t-1"
         with pytest.raises(ConfiguracionFaltante):
-            config.obtener("gcp_wif_config")
+            config.obtener("azure_client_id")
         assert len(llamadas) == 1
 
         ssm.put_parameter(Name=nombre_parametro("azure_tenant_id"), Value="t-2", Type="String", Overwrite=True)

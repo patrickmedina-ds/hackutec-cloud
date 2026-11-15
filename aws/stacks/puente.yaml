@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
   Red TeleCorp - bloque B. Lambda puente-multinube que replica cada evento telecorp.*
-  del bus a Pub/Sub (GCP) y Event Grid (Azure) como CloudEvents 1.0, con federación
+  del bus a Event Grid (Azure) como CloudEvents 1.0, con federación
   de identidades sin llaves guardadas (ver docs/federacion.md).
 
 Parameters:
@@ -45,13 +45,13 @@ Resources:
                 aws:SourceArn: !GetAtt ReglaPuente.Arn
 
   # ---------------------------------------------------------------------------
-  # Rol de nombre fijo: GCP (attribute.aws_role) y Entra (subject) confían en él.
+  # Rol de nombre fijo: Entra (subject) confía en él.
   # ---------------------------------------------------------------------------
   PuenteRol:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub telecorp-${Stage}-puente-multinube-rol
-      Description: Rol de la Lambda puente-multinube (federado con GCP WIF y Entra ID)
+      Description: Rol de la Lambda puente-multinube (federado con Entra ID)
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -76,7 +76,6 @@ Resources:
                   - ssm:GetParameter
                   - ssm:GetParameters
                 Resource:
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/gcp/*
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/azure/*
               - Sid: DescifrarParametrosSeguros
                 Effect: Allow
@@ -118,7 +117,7 @@ Resources:
     DependsOn: PuenteLogs
     Properties:
       FunctionName: !Sub telecorp-${Stage}-puente-multinube
-      Description: Replica eventos telecorp.* a GCP Pub/Sub y Azure Event Grid (CloudEvents 1.0)
+      Description: Replica eventos telecorp.* a Azure Event Grid (CloudEvents 1.0)
       CodeUri: ../src/puente_multinube/
       Handler: app.handler
       Runtime: python3.12
@@ -135,9 +134,8 @@ Resources:
           STAGE: !Ref Stage
           BUS_EVENTOS: !Sub telecorp-${Stage}-eventos
           POWERTOOLS_SERVICE_NAME: puente-multinube
-          DESTINOS: gcp,azure
+          DESTINOS: azure
           AZURE_ORIGEN_JWT: iam # plan B: cognito (ver docs/federacion.md)
-          GCP_IMPERSONAR: "false" # plan B: "true" usa la cuenta de servicio telecorp-<stage>-puente
           AWS_STS_REGIONAL_ENDPOINTS: regional
       # La regla invoca la Lambda de forma asíncrona: si la función lanza error,
       # Lambda reintenta (2 veces) y luego deja el evento en la DLQ.
@@ -189,7 +187,7 @@ Resources:
     Properties:
       AlarmName: !Sub telecorp-${Stage}-puente-dlq-con-mensajes
       AlarmDescription: !Sub >-
-        Hay eventos que no se replicaron a GCP/Azure tras agotar los reintentos.
+        Hay eventos que no se replicaron a Azure tras agotar los reintentos.
         Revisar logs de telecorp-${Stage}-puente-multinube y redirigir la DLQ.
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible
@@ -207,7 +205,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub telecorp-${Stage}-puente-errores
-      AlarmDescription: La Lambda puente-multinube está fallando (algún destino no responde).
+      AlarmDescription: La Lambda puente-multinube está fallando (el destino no responde).
       Namespace: AWS/Lambda
       MetricName: Errors
       Dimensions:
@@ -224,7 +222,7 @@ Outputs:
   PuenteFuncionArn:
     Value: !GetAtt PuenteFuncion.Arn
   PuenteRolArn:
-    Description: Sujeto confiado por GCP WIF y por la credencial federada de Entra ID
+    Description: Sujeto confiado por la credencial federada de Entra ID
     Value: !GetAtt PuenteRol.Arn
   PuenteDLQUrl:
     Value: !Ref PuenteDLQ

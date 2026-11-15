@@ -1,10 +1,9 @@
-import base64
 import copy
 import json
 
 import pytest
 from apoyo_puente import EVENTOS
-from conversion import EventoInvalido, a_cloudevent, atributos_pubsub, mensaje_pubsub
+from conversion import EventoInvalido, a_cloudevent
 
 
 @pytest.mark.parametrize("tipo", list(EVENTOS))
@@ -31,27 +30,6 @@ def test_cloudevent_cumple_contrato(tipo):
 )
 def test_subject_es_zona_o_incidencia(tipo, subject):
     assert a_cloudevent(EVENTOS[tipo])["subject"] == subject
-
-
-def test_atributos_pubsub_toman_zona_del_snapshot():
-    ce = a_cloudevent(EVENTOS["Incidencia.CambioEstado"])
-    assert atributos_pubsub(ce) == {
-        "ce_type": "Incidencia.CambioEstado",
-        "ce_id": "evt-inc-1",
-        "zonaId": "LIM-MIR-01",
-    }
-
-
-def test_atributos_pubsub_sin_zona():
-    ce = a_cloudevent(EVENTOS["Notificacion.Fallida"])
-    assert atributos_pubsub(ce) == {"ce_type": "Notificacion.Fallida", "ce_id": "evt-not-1"}
-
-
-def test_mensaje_pubsub_lleva_el_cloudevent_completo():
-    ce = a_cloudevent(EVENTOS["Antena.CambioEstado"])
-    mensaje = mensaje_pubsub(ce)
-    assert json.loads(base64.b64decode(mensaje["data"])) == ce
-    assert mensaje["attributes"]["zonaId"] == "LIM-MIR-01"
 
 
 def test_evento_sin_detail_type_es_invalido():

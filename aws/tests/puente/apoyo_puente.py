@@ -33,24 +33,9 @@ class HttpFalso:
         return [c for c in self.llamadas if fragmento in c["url"]]
 
 
-class CredencialesFalsas:
-    """Imita las credenciales de google-auth: `valid`, `token` y `refresh()`."""
-
-    def __init__(self):
-        self.token = None
-        self.valid = False
-        self.refrescos = 0
-
-    def refresh(self, request):
-        self.refrescos += 1
-        self.token = f"token-gcp-{self.refrescos}"
-        self.valid = True
-
-
 class ConfigFalsa:
     def __init__(self, valores=None):
         self.valores = valores or {
-            "gcp_wif_config": '{"type": "external_account", "quota_project_id": "telecorp-proyecto"}',
             "azure_tenant_id": "tenant-123",
             "azure_client_id": "cliente-456",
             "azure_eventgrid_endpoint": "https://telecorp-test-eventos.eastus2-1.eventgrid.azure.net/api/events",

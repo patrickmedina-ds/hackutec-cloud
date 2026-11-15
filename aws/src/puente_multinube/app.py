@@ -1,8 +1,7 @@
 """Lambda `telecorp-<stage>-puente-multinube`.
 
 Recibe cada evento `telecorp.*` del bus, lo convierte a CloudEvents 1.0 y lo replica
-en Pub/Sub (GCP) y Event Grid (Azure). Los envíos son independientes: si uno falla,
-el otro se intenta igual, y al final se lanza `ErrorReplica` para que la invocación
+en Event Grid (Azure). Si el envío falla, se lanza `ErrorReplica` para que la invocación
 asíncrona se reintente (y acabe en la DLQ `telecorp-<stage>-puente-dlq`).
 
 Credenciales, tokens y configuración viven en variables de módulo para reutilizarse
@@ -18,9 +17,8 @@ import os
 import requests
 
 from configuracion import Configuracion
-from conversion import a_cloudevent, mensaje_pubsub
+from conversion import a_cloudevent
 from destino_azure import PublicadorEventGrid
-from destino_gcp import PublicadorPubSub
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -34,7 +32,7 @@ _estado: dict = {}
 
 
 def _destinos_activos() -> list[str]:
-    return [d.strip() for d in os.environ.get("DESTINOS", "gcp,azure").split(",") if d.strip()]
+    return [d.strip() for d in os.environ.get("DESTINOS", "azure").split(",") if d.strip()]
 
 
 def _publicadores() -> dict:
@@ -42,7 +40,6 @@ def _publicadores() -> dict:
     if not _estado:
         http = requests.Session()
         config = Configuracion()
-        _estado["gcp"] = PublicadorPubSub(config, http)
         _estado["azure"] = PublicadorEventGrid(config, http)
     return _estado
 
@@ -52,10 +49,9 @@ def _log(nivel: int, mensaje: str, **campos) -> None:
 
 
 def replicar(evento: dict, publicadores: dict, destinos: list[str]) -> dict:
-    """Envía el evento a cada destino de forma independiente. Devuelve el resultado por destino."""
+    """Envía el evento a cada destino por destino. Devuelve el resultado por destino."""
     ce = a_cloudevent(evento)
     envios = {
-        "gcp": lambda: publicadores["gcp"].publicar(mensaje_pubsub(ce)),
         "azure": lambda: publicadores["azure"].publicar(ce),
     }
     resultado: dict[str, dict] = {}

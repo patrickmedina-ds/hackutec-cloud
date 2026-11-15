@@ -7,7 +7,7 @@ resource "azurerm_cosmosdb_account" "main" {
   tags                = local.etiquetas
 
   # Solo Microsoft Entra ID (RBAC de datos); sin llaves.
-  local_authentication_disabled = true
+  local_authentication_enabled = false
 
   capabilities {
     name = "EnableServerless"
