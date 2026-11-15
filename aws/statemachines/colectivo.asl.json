@@ -31,26 +31,44 @@
       ],
       "Default": "SinAccion"
     },
-
     "BuscarColectivoExistente": {
       "Type": "Task",
       "Comment": "Idempotencia ante entregas duplicadas del evento.",
       "Resource": "arn:aws:states:::dynamodb:getItem",
       "Arguments": {
         "TableName": "${TablaIncidencias}",
-        "Key": { "incidenciaId": { "S": "{% $evento.incidenteColectivoId %}" } },
+        "Key": {
+          "incidenciaId": {
+            "S": "{% $evento.incidenteColectivoId %}"
+          }
+        },
         "ProjectionExpression": "incidenciaId",
         "ConsistentRead": true
       },
-      "Assign": { "yaExiste": "{% $exists($states.result.Item) %}" },
+      "Assign": {
+        "yaExiste": "{% $exists($states.result.Item) %}"
+      },
       "Retry": [
-        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
       ],
       "Next": "YaProcesado"
     },
     "YaProcesado": {
       "Type": "Choice",
-      "Choices": [{ "Condition": "{% $yaExiste %}", "Next": "SinAccion" }],
+      "Choices": [
+        {
+          "Condition": "{% $yaExiste %}",
+          "Next": "SinAccion"
+        }
+      ],
       "Default": "LeerZonaColectivo"
     },
     "LeerZonaColectivo": {
@@ -58,14 +76,26 @@
       "Resource": "arn:aws:states:::dynamodb:getItem",
       "Arguments": {
         "TableName": "${TablaZonas}",
-        "Key": { "zonaId": { "S": "{% $evento.zonaId %}" } },
+        "Key": {
+          "zonaId": {
+            "S": "{% $evento.zonaId %}"
+          }
+        },
         "ProjectionExpression": "zonaId, tipoZona"
       },
       "Assign": {
         "tipoZona": "{% $states.result.Item.tipoZona.S ? $states.result.Item.tipoZona.S : 'RESIDENCIAL' %}"
       },
       "Retry": [
-        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
       ],
       "Next": "ConsultarAntenasZona"
     },
@@ -76,15 +106,29 @@
         "TableName": "${TablaAntenas}",
         "IndexName": "por-zona",
         "KeyConditionExpression": "zonaId = :z",
-        "ExpressionAttributeNames": { "#e": "estado" },
-        "ExpressionAttributeValues": { ":z": { "S": "{% $evento.zonaId %}" } },
+        "ExpressionAttributeNames": {
+          "#e": "estado"
+        },
+        "ExpressionAttributeValues": {
+          ":z": {
+            "S": "{% $evento.zonaId %}"
+          }
+        },
         "ProjectionExpression": "antenaId, #e"
       },
       "Assign": {
         "antenas": "{% [$states.result.Items.{'antenaId': antenaId.S, 'estado': estado.S}] %}"
       },
       "Retry": [
-        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
       ],
       "Next": "LeerReportes"
     },
@@ -95,7 +139,9 @@
       "ItemSelector": "{% $states.context.Map.Item.Value %}",
       "MaxConcurrency": 10,
       "ItemProcessor": {
-        "ProcessorConfig": { "Mode": "INLINE" },
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
         "StartAt": "LeerReporte",
         "States": {
           "LeerReporte": {
@@ -103,20 +149,42 @@
             "Resource": "arn:aws:states:::dynamodb:getItem",
             "Arguments": {
               "TableName": "${TablaIncidencias}",
-              "Key": { "incidenciaId": { "S": "{% $states.input %}" } },
+              "Key": {
+                "incidenciaId": {
+                  "S": "{% $states.input %}"
+                }
+              },
               "ProjectionExpression": "descripcion, tipo"
             },
             "Output": "{% {'descripcion': $states.result.Item.descripcion.S ? $states.result.Item.descripcion.S : '', 'tipo': $states.result.Item.tipo.S ? $states.result.Item.tipo.S : ''} %}",
             "Retry": [
-              { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 3,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
             ],
             "End": true
           }
         }
       },
-      "Assign": { "reportes": "{% $states.result %}" },
+      "Assign": {
+        "reportes": "{% $states.result %}"
+      },
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Assign": { "reportes": "{% [] %}" }, "Next": "ResumirIA" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Assign": {
+            "reportes": "{% [] %}"
+          },
+          "Next": "ResumirIA"
+        }
       ],
       "Next": "ResumirIA"
     },
@@ -134,17 +202,29 @@
           "antenas": "{% $antenas %}"
         }
       },
-      "Assign": { "ia": "{% $states.result.Payload %}" },
+      "Assign": {
+        "ia": "{% $states.result.Payload %}"
+      },
       "TimeoutSeconds": 30,
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
-          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
         }
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "Assign": {
             "ia": "{% {'resumen': 'Incidente colectivo en la zona ' & $evento.zonaId, 'severidad': 'ALTA'} %}"
           },
@@ -181,33 +261,67 @@
       },
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
-          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
         },
-        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2 }
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
       ],
       "Next": "HayHijos"
     },
-
     "LeerMarcador": {
       "Type": "Task",
       "Resource": "arn:aws:states:::dynamodb:getItem",
       "Arguments": {
         "TableName": "${TablaZonaVentana}",
-        "Key": { "zonaId": { "S": "{% $evento.zonaId %}" }, "sk": { "S": "COLECTIVO_ACTIVO" } },
+        "Key": {
+          "zonaId": {
+            "S": "{% $evento.zonaId %}"
+          },
+          "sk": {
+            "S": "COLECTIVO_ACTIVO"
+          }
+        },
         "ConsistentRead": true
       },
       "Assign": {
         "colectivoId": "{% $exists($states.result.Item.incidenteColectivoId.S) ? $states.result.Item.incidenteColectivoId.S : null %}"
       },
       "Retry": [
-        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
       ],
       "Next": "HayColectivoActivo"
     },
     "HayColectivoActivo": {
       "Type": "Choice",
-      "Choices": [{ "Condition": "{% $colectivoId != null %}", "Next": "AgregarAntena" }],
+      "Choices": [
+        {
+          "Condition": "{% $colectivoId != null %}",
+          "Next": "AgregarAntena"
+        }
+      ],
       "Default": "CrearProactiva"
     },
     "CrearProactiva": {
@@ -231,16 +345,36 @@
       },
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
-          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
         },
-        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2 }
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
       ],
       "Next": "ProactivaCreada"
     },
     "ProactivaCreada": {
       "Type": "Choice",
-      "Choices": [{ "Condition": "{% $proactivaCreada %}", "Next": "Fin" }],
+      "Choices": [
+        {
+          "Condition": "{% $proactivaCreada %}",
+          "Next": "Fin"
+        }
+      ],
       "Default": "AgregarAntena"
     },
     "AgregarAntena": {
@@ -249,20 +383,49 @@
       "Resource": "arn:aws:states:::dynamodb:updateItem",
       "Arguments": {
         "TableName": "${TablaIncidencias}",
-        "Key": { "incidenciaId": { "S": "{% $colectivoId %}" } },
+        "Key": {
+          "incidenciaId": {
+            "S": "{% $colectivoId %}"
+          }
+        },
         "UpdateExpression": "SET antenasAfectadas = list_append(if_not_exists(antenasAfectadas, :vacia), :nueva)",
         "ConditionExpression": "attribute_exists(incidenciaId) AND NOT contains(antenasAfectadas, :aid)",
         "ExpressionAttributeValues": {
-          ":vacia": { "L": [] },
-          ":nueva": { "L": [{ "S": "{% $evento.antenaId %}" }] },
-          ":aid": { "S": "{% $evento.antenaId %}" }
+          ":vacia": {
+            "L": []
+          },
+          ":nueva": {
+            "L": [
+              {
+                "S": "{% $evento.antenaId %}"
+              }
+            ]
+          },
+          ":aid": {
+            "S": "{% $evento.antenaId %}"
+          }
         }
       },
       "Retry": [
-        { "ErrorEquals": ["DynamoDB.ProvisionedThroughputExceededException", "DynamoDB.InternalServerErrorException", "DynamoDB.AmazonDynamoDBException"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+        {
+          "ErrorEquals": [
+            "DynamoDB.ProvisionedThroughputExceededException",
+            "DynamoDB.InternalServerErrorException",
+            "DynamoDB.AmazonDynamoDBException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
       ],
       "Catch": [
-        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "EscalarColectivo" }
+        {
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "Next": "EscalarColectivo"
+        }
       ],
       "Next": "EscalarColectivo"
     },
@@ -285,14 +448,28 @@
       },
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
-          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
         },
-        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2 }
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
       ],
       "Next": "HayHijos"
     },
-
     "ContarAntenasDegradadas": {
       "Type": "Task",
       "Comment": "Excluye la antena del evento por si el GSI aún no refleja su vuelta a NORMAL.",
@@ -301,24 +478,44 @@
         "TableName": "${TablaAntenas}",
         "IndexName": "por-zona",
         "KeyConditionExpression": "zonaId = :z",
-        "FilterExpression": "#e <> :normal AND antenaId <> :aid",
-        "ExpressionAttributeNames": { "#e": "estado" },
-        "ExpressionAttributeValues": {
-          ":z": { "S": "{% $evento.zonaId %}" },
-          ":normal": { "S": "NORMAL" },
-          ":aid": { "S": "{% $evento.antenaId %}" }
+        "FilterExpression": "#e <> :normal",
+        "ExpressionAttributeNames": {
+          "#e": "estado"
         },
-        "Select": "COUNT"
+        "ExpressionAttributeValues": {
+          ":z": {
+            "S": "{% $evento.zonaId %}"
+          },
+          ":normal": {
+            "S": "NORMAL"
+          }
+        },
+        "ProjectionExpression": "antenaId"
       },
-      "Assign": { "degradadas": "{% $states.result.Count %}" },
+      "Assign": {
+        "degradadas": "{% $count($states.result.Items[antenaId.S != $evento.antenaId]) %}"
+      },
       "Retry": [
-        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
       ],
       "Next": "ZonaNormal"
     },
     "ZonaNormal": {
       "Type": "Choice",
-      "Choices": [{ "Condition": "{% $degradadas = 0 %}", "Next": "LeerMarcadorRestablecer" }],
+      "Choices": [
+        {
+          "Condition": "{% $degradadas = 0 %}",
+          "Next": "LeerMarcadorRestablecer"
+        }
+      ],
       "Default": "SinAccion"
     },
     "LeerMarcadorRestablecer": {
@@ -326,20 +523,40 @@
       "Resource": "arn:aws:states:::dynamodb:getItem",
       "Arguments": {
         "TableName": "${TablaZonaVentana}",
-        "Key": { "zonaId": { "S": "{% $evento.zonaId %}" }, "sk": { "S": "COLECTIVO_ACTIVO" } },
+        "Key": {
+          "zonaId": {
+            "S": "{% $evento.zonaId %}"
+          },
+          "sk": {
+            "S": "COLECTIVO_ACTIVO"
+          }
+        },
         "ConsistentRead": true
       },
       "Assign": {
         "colectivoId": "{% $exists($states.result.Item.incidenteColectivoId.S) ? $states.result.Item.incidenteColectivoId.S : null %}"
       },
       "Retry": [
-        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL" }
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
       ],
       "Next": "HayColectivoParaRestablecer"
     },
     "HayColectivoParaRestablecer": {
       "Type": "Choice",
-      "Choices": [{ "Condition": "{% $colectivoId != null %}", "Next": "Restablecer" }],
+      "Choices": [
+        {
+          "Condition": "{% $colectivoId != null %}",
+          "Next": "Restablecer"
+        }
+      ],
       "Default": "SinAccion"
     },
     "Restablecer": {
@@ -361,17 +578,36 @@
       },
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
-          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
         },
-        { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2 }
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
       ],
       "Next": "HayHijos"
     },
-
     "HayHijos": {
       "Type": "Choice",
-      "Choices": [{ "Condition": "{% $count($hijos) > 0 %}", "Next": "MoverHijos" }],
+      "Choices": [
+        {
+          "Condition": "{% $count($hijos) > 0 %}",
+          "Next": "MoverHijos"
+        }
+      ],
       "Default": "Fin"
     },
     "MoverHijos": {
@@ -381,7 +617,9 @@
       "ItemSelector": "{% {'accion': 'MOVER_HIJO', 'incidenciaId': $states.context.Map.Item.Value, 'destino': $destino, 'incidenteColectivoId': $colectivoId, 'comentario': $comentario} %}",
       "MaxConcurrency": 10,
       "ItemProcessor": {
-        "ProcessorConfig": { "Mode": "INLINE" },
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
         "StartAt": "MoverHijo",
         "States": {
           "MoverHijo": {
@@ -394,27 +632,46 @@
             "Output": "{% {'incidenciaId': $states.result.Payload.incidenciaId, 'transicionado': $states.result.Payload.transicionado} %}",
             "Retry": [
               {
-                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
-                "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 3,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
               },
-              { "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2 }
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
             ],
             "Catch": [
               {
-                "ErrorEquals": ["States.ALL"],
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
                 "Output": "{% {'incidenciaId': $states.input.incidenciaId, 'transicionado': false, 'error': $states.errorOutput.Error} %}",
                 "Next": "HijoFallido"
               }
             ],
             "End": true
           },
-          "HijoFallido": { "Type": "Pass", "End": true }
+          "HijoFallido": {
+            "Type": "Pass",
+            "End": true
+          }
         }
       },
       "Output": "{% {'colectivoId': $colectivoId, 'destino': $destino, 'hijos': $count($states.result), 'movidos': $count($states.result[transicionado = true])} %}",
       "End": true
     },
-
     "Fin": {
       "Type": "Succeed",
       "Output": "{% {'colectivoId': $colectivoId} %}"
