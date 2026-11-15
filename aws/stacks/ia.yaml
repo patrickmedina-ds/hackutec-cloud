@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Red TeleCorp - bloque G. Lambda clasificar-ia (Gemini en Vertex AI con respaldo por reglas).
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+  ComunLayerArn:
+    Type: String
+    Description: ARN de la capa telecorp_comun
+
+Resources:
+  # Rol con nombre fijo: la federación de GCP (bloque B) confía en este nombre.
+  # Requiere CAPABILITY_NAMED_IAM al desplegar.
+  ClasificarIaRol:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub telecorp-${Stage}-clasificar-ia-rol
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: leer-parametros-gcp
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/gcp/wif-config
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/gcp/project-id
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/gcp/region
+
+  ClasificarIa:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-clasificar-ia
+      Description: Clasifica incidencias, resume colectivos y redacta avisos con Gemini (respaldo por reglas)
+      CodeUri: ../src/clasificar_ia/
+      Handler: app.handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      MemorySize: 512
+      Timeout: 15
+      Role: !GetAtt ClasificarIaRol.Arn
+      Layers:
+        - !Ref ComunLayerArn
+      Environment:
+        Variables:
+          STAGE: !Ref Stage
+          POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-clasificar-ia
+          MODELO_GEMINI: gemini-2.5-flash
+
+Outputs:
+  ClasificarIaArn:
+    Description: ARN de la Lambda clasificar-ia
+    Value: !GetAtt ClasificarIa.Arn
+  ClasificarIaRolArn:
+    Description: ARN del rol de ejecución (confiado por la federación de GCP)
+    Value: !GetAtt ClasificarIaRol.Arn
