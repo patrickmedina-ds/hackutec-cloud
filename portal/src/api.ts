@@ -1,5 +1,5 @@
 import { ApiError } from './types';
-import type { Api, Estado, FiltrosIncidencias, Incidencia, NuevoReporte, Pagina, Transicion, Zona, Antena, EstadoAntena } from './types';
+import type { Api, Estado, FiltrosIncidencias, Incidencia, NuevoReporte, Pagina, Transicion, Zona, Antena, EstadoAntena, Reporte } from './types';
 
 type Fetch = typeof fetch;
 
@@ -81,5 +81,11 @@ export function crearApi(
     listarZonas: () => pedir<Zona[]>('GET', '/zonas'),
     listarAntenas: (f: { zonaId?: string; estado?: EstadoAntena | '' } = {}) =>
       pedir<Antena[]>('GET', '/antenas' + consulta({ zonaId: f.zonaId, estado: f.estado })),
+    analitica: (reporte: Reporte, dias = 7) =>
+      pedir<any>('GET', `/analitica/${id(reporte)}` + consulta({ dias })).then((r) => ({
+        ...r,
+        filas: r?.filas ?? [],
+        total: r?.total ?? r?.filas?.length ?? 0,
+      })),
   };
 }

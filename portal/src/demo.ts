@@ -1,7 +1,7 @@
 import { puedeTransicionar } from './transiciones';
 import { ApiError } from './types';
 import type {
-  Antena, Api, Estado, FiltrosIncidencias, Incidencia, NuevoReporte, Pagina, Rol, Transicion, TipoProblema, Zona, Nivel, Severidad,
+  Antena, Api, Reporte, RespuestaAnalitica, Estado, FiltrosIncidencias, Incidencia, NuevoReporte, Pagina, Rol, Transicion, TipoProblema, Zona, Nivel, Severidad,
 } from './types';
 
 const MIN = 60_000;
@@ -57,6 +57,59 @@ const RESUMENES: Record<TipoProblema, string> = {
   INTERMITENCIA: 'Cortes breves y repetidos de señal; se sugiere revisar enlace de la antena cercana.',
   OTRO: 'Reporte sin patrón técnico claro; requiere revisión manual.',
 };
+
+const TIPOS_DEMO: [string, number][] = [
+  ['SIN_INTERNET', 41], ['LENTITUD', 33], ['INTERMITENCIA', 22], ['SIN_LLAMADAS', 14], ['SIN_SMS', 6], ['OTRO', 4],
+];
+const ZONAS_BASE: [string, number, number, number][] = [
+  ['LIM-SJL', 38, 9, 14], ['LIM-VES', 27, 6, 9], ['LIM-LOL', 19, 4, 6], ['LIM-CAL', 15, 5, 4],
+  ['LIM-ATE', 10, 1, 3], ['LIM-MIR', 6, 0, 1], ['LIM-SIS', 4, 0, 0], ['LIM-SUR', 3, 0, 0],
+];
+// [antena, zona, caidas, saturaciones, inhabilitaciones] por cada 7 días
+const ANTENAS_BASE: [string, string, number, number, number][] = [
+  ['ANT-SJL-03', 'LIM-SJL', 5, 1, 1], ['ANT-SJL-01', 'LIM-SJL', 0, 6, 0], ['ANT-VES-01', 'LIM-VES', 0, 5, 0],
+  ['ANT-CAL-02', 'LIM-CAL', 1, 0, 3], ['ANT-LOL-02', 'LIM-LOL', 3, 0, 0], ['ANT-VES-02', 'LIM-VES', 0, 1, 0],
+];
+const sinZ = (s: string) => s.replace('T', ' ').replace('Z', '');
+
+/** Datos de ejemplo escalados al periodo (7 días = base). */
+export function analiticaDemo<R extends Reporte>(reporte: R, dias = 7): RespuestaAnalitica<R> {
+  const k = dias / 7;
+  const e = (n: number) => (n > 0 ? Math.max(Math.round(n * k), 1) : 0);
+  let filas: unknown[];
+  switch (reporte) {
+    case 'top_zonas':
+      filas = ZONAS_BASE.map(([zonaId, i, ab, pa]) => ({ zonaId, incidencias: e(i), abiertas: Math.min(e(ab), e(i)), prioridad_alta: Math.min(e(pa), e(i)) }));
+      break;
+    case 'top_antenas':
+      filas = ANTENAS_BASE.map(([antenaId, zonaId, c, s, h]) => {
+        const [cc, ss, hh] = [e(c), e(s), e(h)];
+        return { antenaId, zonaId, degradaciones: cc + ss + hh, caidas: cc, saturaciones: ss, inhabilitaciones: hh, ultima_degradacion: sinZ(iso(3 * 60 * MIN)) };
+      }).sort((x, y) => y.degradaciones - x.degradaciones);
+      break;
+    case 'tipos_problema':
+      filas = TIPOS_DEMO.map(([tipo, n]) => ({ tipo, incidencias: e(n) }));
+      break;
+    case 'mttr':
+      filas = ZONAS_BASE.slice(0, 5).flatMap(([zonaId], z) =>
+        (['P1', 'P2', 'P3'] as const).map((nivelPrioridad, p) => {
+          const mttr = Math.round((40 + z * 25 + p * 90) * 10) / 10;
+          return { zonaId, nivelPrioridad, resueltas: e(11 - z - p), mttr_min: mttr, mediana_min: Math.round(mttr * 0.8), maximo_min: Math.round(mttr * 2.6) };
+        })).sort((x, y) => y.mttr_min - x.mttr_min);
+      break;
+    case 'colectivos':
+      filas = ([['LIM-SJL', 23, 31, 90], ['LIM-VES', 17, 22, 400], ['LIM-LOL', 9, 12, 1500], ['LIM-SJL', 14, 18, 3000], ['LIM-CAL', 8, 10, 12000], ['LIM-VES', 11, 15, 40000]] as [string, number, number, number][])
+        .filter(([, , , m]) => m <= dias * 24 * 60)
+        .map(([zonaId, u, t, m], i) => ({ incidenteColectivoId: `col-demo-${i + 1}`, zonaId, usuariosDistintos: u, totalIncidencias: t, detectado_en: sinZ(iso(m * MIN)) }));
+      break;
+    default:
+      filas = dias < 30
+        ? [{ zonaId: 'LIM-SJL', colectivos: 2, primer_colectivo: sinZ(iso(3000 * MIN)), ultimo_colectivo: sinZ(iso(90 * MIN)), es_recurrente: true }]
+        : [{ zonaId: 'LIM-SJL', colectivos: 4, primer_colectivo: sinZ(iso(20 * 1440 * MIN)), ultimo_colectivo: sinZ(iso(90 * MIN)), es_recurrente: true },
+           { zonaId: 'LIM-VES', colectivos: 2, primer_colectivo: sinZ(iso(12 * 1440 * MIN)), ultimo_colectivo: sinZ(iso(400 * MIN)), es_recurrente: true }];
+  }
+  return { reporte, dias, total: filas.length, filas: filas as RespuestaAnalitica<R>['filas'], cache: false };
+}
 
 export function crearDemo(rolInicial: Rol = 'operador'): Api {
   let rol: Rol = rolInicial;
@@ -208,6 +261,11 @@ export function crearDemo(rolInicial: Rol = 'operador'): Api {
       inc.actualizadoEn = ts;
       if (estadoNuevo === 'SOLUCIONADA') inc.resueltoEn = ts;
       return clonar(inc);
+    },
+    async analitica(reporte, dias = 7) {
+      await espera(200);
+      exigirOperador();
+      return analiticaDemo(reporte, dias);
     },
     async listarZonas() { await espera(60); return clonar(ZONAS_DEMO); },
     async listarAntenas(f = {}) {
