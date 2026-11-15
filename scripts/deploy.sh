@@ -8,7 +8,8 @@
 #   STAGE       stage de despliegue (por defecto: dev)
 #   AWS_REGION  región de AWS (por defecto: us-east-1)
 #   PYTHON      intérprete de Python 3.12 (por defecto: python3)
-#   SWA_DIR     carpeta con el build de la Static Web App (por defecto: azure/swa/dist)
+#   GCP_PROJECT_ID  proyecto de Google Cloud (o defínelo en gcp/terraform/terraform.tfvars)
+#   SWA_DIR     carpeta de la página de estado (por defecto: azure/status-page)
 
 set -euo pipefail
 
@@ -17,7 +18,7 @@ STAGE="${STAGE:-dev}"
 REGION="${AWS_REGION:-us-east-1}"
 PYTHON="${PYTHON:-python3}"
 STACK="telecorp-${STAGE}"
-SWA_DIR="${SWA_DIR:-${RAIZ}/azure/swa/dist}"
+SWA_DIR="${SWA_DIR:-${RAIZ}/azure/status-page}"
 
 paso() { printf '\n==> [%s] %s\n' "$1" "$2"; }
 info() { printf '    %s\n' "$*"; }
@@ -48,7 +49,7 @@ ssm_guardar() {
 
 # ---------------------------------------------------------------------------
 paso "0/6" "Verificando herramientas necesarias"
-for herramienta in aws sam terraform az gcloud node; do
+for herramienta in aws sam terraform az gcloud node func; do
   if ! command -v "$herramienta" >/dev/null 2>&1; then
     morir "No se encontró '$herramienta' en el PATH. Instálala y vuelve a intentar."
   fi
@@ -56,6 +57,8 @@ for herramienta in aws sam terraform az gcloud node; do
 done
 command -v "$PYTHON" >/dev/null 2>&1 || morir "No se encontró el intérprete '$PYTHON'."
 info "Stage: ${STAGE} · Región AWS: ${REGION}"
+CUENTA_AWS="$(aws sts get-caller-identity --query Account --output text)"
+info "Cuenta AWS: ${CUENTA_AWS}"
 
 # ---------------------------------------------------------------------------
 paso "1/6" "AWS: sam build y sam deploy (stack ${STACK})"
@@ -66,20 +69,30 @@ paso "1/6" "AWS: sam build y sam deploy (stack ${STACK})"
     --stack-name "$STACK" \
     --region "$REGION" \
     --resolve-s3 \
-    --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+    --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
     --no-confirm-changeset \
     --no-fail-on-empty-changeset \
     --parameter-overrides "Stage=${STAGE}"
 )
 
 # ---------------------------------------------------------------------------
-paso "2/6" "GCP y Azure: terraform apply"
-for nube in gcp azure; do
-  info "terraform apply en ${nube}/terraform"
-  terraform -chdir="${RAIZ}/${nube}/terraform" init -input=false -upgrade >/dev/null
-  terraform -chdir="${RAIZ}/${nube}/terraform" apply -input=false -auto-approve \
-    -var "stage=${STAGE}"
-done
+paso "2/6" "Federación saliente de IAM, GCP y Azure: terraform apply"
+# El puente obtiene su JWT para Entra ID con sts:GetWebIdentityToken (docs/federacion.md).
+aws iam enable-outbound-web-identity-federation >/dev/null 2>&1 || true
+EMISOR_AWS="$(aws iam get-outbound-web-identity-federation-info --query IssuerUrl --output text)"
+info "Emisor OIDC de la cuenta: ${EMISOR_AWS}"
+
+VARS_GCP=(-var "stage=${STAGE}" -var "aws_account_id=${CUENTA_AWS}")
+[[ -n "${GCP_PROJECT_ID:-}" ]] && VARS_GCP+=(-var "project_id=${GCP_PROJECT_ID}")
+terraform -chdir="${RAIZ}/gcp/terraform" init -input=false -upgrade >/dev/null
+terraform -chdir="${RAIZ}/gcp/terraform" apply -input=false -auto-approve "${VARS_GCP[@]}"
+
+# Azure va en dos pasadas: la suscripción de Event Grid exige que la función ya esté
+# publicada, así que se crea en el paso 6.
+VARS_AZ=(-var "stage=${STAGE}" -var "aws_account_id=${CUENTA_AWS}" -var "aws_oidc_issuer_url=${EMISOR_AWS}")
+terraform -chdir="${RAIZ}/azure/terraform" init -input=false -upgrade >/dev/null
+terraform -chdir="${RAIZ}/azure/terraform" apply -input=false -auto-approve "${VARS_AZ[@]}" \
+  -var "crear_suscripcion_eventgrid=false"
 
 # ---------------------------------------------------------------------------
 paso "3/6" "Guardando outputs de Terraform en SSM"
@@ -89,9 +102,9 @@ AZ_DIR="${RAIZ}/azure/terraform"
 GCP_WIF="$(tf_salida "$GCP_DIR" wif_config)"
 GCP_PROYECTO="$(tf_salida "$GCP_DIR" project_id)"
 GCP_REGION="$(tf_salida "$GCP_DIR" region)"
-AZ_TENANT="$(tf_salida "$AZ_DIR" tenant_id)"
-AZ_CLIENTE="$(tf_salida "$AZ_DIR" client_id)"
-AZ_EVENTGRID="$(tf_salida "$AZ_DIR" eventgrid_endpoint)"
+AZ_TENANT="$(tf_salida "$AZ_DIR" federacion_tenant_id)"
+AZ_CLIENTE="$(tf_salida "$AZ_DIR" federacion_client_id)"
+AZ_EVENTGRID="$(tf_salida "$AZ_DIR" federacion_eventgrid_endpoint)"
 ssm_guardar "gcp/wif-config"           "$GCP_WIF"
 ssm_guardar "gcp/project-id"           "$GCP_PROYECTO"
 ssm_guardar "gcp/region"               "$GCP_REGION"
@@ -110,9 +123,16 @@ PORTAL="${RAIZ}/portal"
 
 aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
   --query 'Stacks[0].Outputs' --output json \
-  | "$PYTHON" -c 'import json, sys
-salidas = json.load(sys.stdin)
-json.dump({s["OutputKey"]: s["OutputValue"] for s in salidas}, sys.stdout, indent=2, ensure_ascii=False)
+  | REGION="$REGION" "$PYTHON" -c 'import json, os, sys
+salidas = {s["OutputKey"]: s["OutputValue"] for s in json.load(sys.stdin)}
+dominio = salidas["CloudFrontDomain"]
+json.dump({
+    "apiUrl": salidas["ApiUrl"],
+    "region": os.environ["REGION"],
+    "cognitoDomain": salidas["CognitoDomain"],
+    "clientId": salidas["UserPoolClientId"],
+    "redirectUri": dominio if dominio.startswith("https://") else f"https://{dominio}/",
+}, sys.stdout, indent=2)
 print()' > "${PORTAL}/public/config.json"
 info "portal/public/config.json generado desde los outputs de CloudFormation."
 
@@ -122,27 +142,32 @@ info "portal/public/config.json generado desde los outputs de CloudFormation."
   npm run build
 )
 
-BUCKET="$(cfn_salida PortalBucketName)"
+BUCKET="$(cfn_salida PortalBucket)"
 DISTRIBUCION="$(cfn_salida CloudFrontDistributionId)"
 aws s3 sync "${PORTAL}/dist" "s3://${BUCKET}" --delete --region "$REGION"
 aws cloudfront create-invalidation --distribution-id "$DISTRIBUCION" --paths "/*" >/dev/null
 info "Portal publicado en s3://${BUCKET} e invalidación de CloudFront ${DISTRIBUCION} creada."
 
 # ---------------------------------------------------------------------------
-paso "6/6" "Azure: Functions y Static Web App"
+paso "6/6" "Azure: Functions, suscripción de Event Grid y página de estado"
 FUNCIONES_DIR="${RAIZ}/azure/functions"
 [[ -d "$FUNCIONES_DIR" ]] || morir "No existe la carpeta de Azure Functions: $FUNCIONES_DIR"
-FUNCTION_APP="$(tf_salida "$AZ_DIR" function_app_name)"
-SWA_NOMBRE="$(tf_salida "$AZ_DIR" static_web_app_name)"
-
+FUNCTION_APP="$(tf_salida "$AZ_DIR" funcion_nombre)"
 (
   cd "$FUNCIONES_DIR"
   func azure functionapp publish "$FUNCTION_APP" --python
 )
 
-[[ -d "$SWA_DIR" ]] || morir "No existe el build de la Static Web App: $SWA_DIR"
-TOKEN_SWA="$(az staticwebapp secrets list --name "$SWA_NOMBRE" --query properties.apiKey -o tsv)"
+info "Segunda pasada de Terraform en Azure: suscripción de Event Grid hacia replicar"
+terraform -chdir="$AZ_DIR" apply -input=false -auto-approve "${VARS_AZ[@]}" \
+  -var "crear_suscripcion_eventgrid=true"
+
+[[ -d "$SWA_DIR" ]] || morir "No existe la página de estado: $SWA_DIR"
+API_ESTADO="$(tf_salida "$AZ_DIR" api_estado_url)"
+printf 'window.TELECORP_API = window.TELECORP_API || "%s";\n' "$API_ESTADO" > "${SWA_DIR}/config.js"
+TOKEN_SWA="$(tf_salida "$AZ_DIR" pagina_estado_token)"
 npx --yes @azure/static-web-apps-cli deploy "$SWA_DIR" \
   --deployment-token "$TOKEN_SWA" --env production
+info "Página de estado: $(tf_salida "$AZ_DIR" pagina_estado_url)"
 
 printf '\nDespliegue del stage %s terminado.\n' "$STAGE"

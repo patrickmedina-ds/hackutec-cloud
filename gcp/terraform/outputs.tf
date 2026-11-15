@@ -39,3 +39,8 @@ output "vistas" {
     [for v in google_bigquery_table.vistas_derivadas : v.table_id],
   )
 }
+
+output "region" {
+  description = "Región de GCP; el despliegue la guarda en SSM /telecorp/<stage>/gcp/region."
+  value       = var.region
+}

@@ -39,7 +39,7 @@ El simulador busca `zonas.json` y `antenas.json` en este orden:
 $PY simulador/antenas.py --escenario normal --duracion 60 --intervalo 10
 
 # Caída de una zona, a Kinesis (telecorp-dev-telemetria)
-$PY simulador/antenas.py --escenario caida --zona LIM-SJL-02 --destino kinesis
+$PY simulador/antenas.py --escenario caida --zona LIM-SJL-01 --destino kinesis
 
 # Saturación de una zona, por IoT (telecorp/antenas/{antenaId}/trafico)
 $PY simulador/antenas.py --escenario saturacion --zona LIM-MIR-01 --destino iot
@@ -65,7 +65,7 @@ Umbrales (de `telecorp_comun.antenas`): menos de 60 GB/min es caída, más de 12
 $PY simulador/reportes.py --escenario aislado --reportes 5 --destino sqs
 
 # 15 usuarios distintos en la misma zona, en 10 minutos (umbral colectivo: 10)
-$PY simulador/reportes.py --escenario masivo --zona LIM-SJL-02 --usuarios 15 --minutos 10 --tipo SIN_INTERNET --destino sqs
+$PY simulador/reportes.py --escenario masivo --zona LIM-SJL-01 --usuarios 15 --minutos 10 --tipo SIN_INTERNET --destino sqs
 
 # Ráfaga de 2000 reportes en varias zonas, enviada en lotes de 10
 $PY simulador/reportes.py --escenario tormenta --reportes 2000 --destino sqs --dry-run
@@ -92,7 +92,7 @@ y descripciones en español según el tipo de problema.
 $PY simulador/demo.py --dry-run
 
 # Telemetría a Kinesis y reportes a SQS (requiere credenciales)
-$PY simulador/demo.py --destino sqs --stage dev --zona LIM-SJL-02
+$PY simulador/demo.py --destino sqs --stage dev --zona LIM-SJL-01
 ```
 
 La demo imprime cada paso con la tabla de antenas (estado según el umbral) y la lista

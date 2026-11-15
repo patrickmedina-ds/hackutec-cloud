@@ -29,7 +29,7 @@ from comun import (
     stage_por_defecto,
 )
 
-ZONA_DEMO_POR_DEFECTO = "LIM-SJL-02"
+ZONA_DEMO_POR_DEFECTO = "LIM-SJL-01"
 USUARIOS_DEMO = 12
 MINUTOS_DEMO = 10
 TIPO_DEMO = "SIN_INTERNET"

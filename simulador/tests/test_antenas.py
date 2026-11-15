@@ -184,9 +184,15 @@ def test_cli_recurrente_exige_pasos_suficientes(capsys):
     assert "al menos 6" in capsys.readouterr().err
 
 
+def sim_datos_ejemplo():
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[1] / "datos_ejemplo"
+
+
 def test_cli_dry_run_stdout_imprime_lecturas(capsys):
     codigo = sim.main(
-        ["--escenario", "caida", "--zona", "LIM-SJL-02", "--duracion", "2", "--intervalo", "1", "--semilla", "3", "--dry-run"]
+        ["--escenario", "caida", "--zona", "LIM-SJL-02", "--duracion", "2", "--intervalo", "1", "--semilla", "3", "--dry-run", "--datos", str(sim_datos_ejemplo())]
     )
     salida = capsys.readouterr().out.strip().splitlines()
     assert codigo == 0
