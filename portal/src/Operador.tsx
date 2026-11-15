@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ABIERTO, ETIQUETA_ESTADO, transicionesValidas } from './transiciones';
 import { ApiError, ESTADOS, TIPOS } from './types';
 import type { Antena, Api, Clase, Estado, Incidencia, Transicion, Zona } from './types';
+import { Analitica } from './Analitica';
 import { AntenaBadge, Aviso, EstadoBadge, LineaTiempo, PrioridadChip, SeveridadChip, fmtFecha, nombreZona } from './ui';
 
 const etiquetaTipo = (t: string) => TIPOS.find((x) => x.valor === t)?.etiqueta ?? t;
@@ -309,16 +310,24 @@ export function OperadorVista({ api }: { api: Api }) {
   const [zonas, setZonas] = useState<Zona[]>([]);
   const [version, setVersion] = useState(0);
   const [err, setErr] = useState('');
+  const [sub, setSub] = useState<'op' | 'an'>('op');
   useEffect(() => { api.listarZonas().then(setZonas).catch((e) => setErr(e.message)); }, [api]);
   return (
     <>
       {err && <Aviso tipo="error">No se cargaron las zonas: {err}</Aviso>}
+      <nav className="tabs" aria-label="Secciones del panel">
+        <button className="tab" aria-current={sub === 'op' ? 'page' : undefined} onClick={() => setSub('op')}>Incidencias y antenas</button>
+        <button className="tab" aria-current={sub === 'an' ? 'page' : undefined} onClick={() => setSub('an')}>Analítica</button>
+      </nav>
+      {sub === 'an' && <Analitica api={api} zonas={zonas} />}
+      {sub === 'op' && <>
       <div className="fila entre">
         <Resumen api={api} version={version} />
         <button className="btn btn-sec" onClick={() => setVersion((v) => v + 1)}>Actualizar datos</button>
       </div>
       <Tabla api={api} zonas={zonas} version={version} onCambio={() => setVersion((v) => v + 1)} />
       <Antenas api={api} zonas={zonas} version={version} />
+      </>}
     </>
   );
 }

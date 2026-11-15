@@ -98,6 +98,23 @@ export interface Pagina {
   cursor: string | null;
 }
 
+export type Reporte = 'top_zonas' | 'top_antenas' | 'tipos_problema' | 'mttr' | 'colectivos' | 'recurrencia';
+export type Dias = 7 | 30 | 90;
+
+export interface FilaTopZona { zonaId: string; incidencias: number; abiertas: number; prioridad_alta: number }
+export interface FilaTopAntena { antenaId: string; zonaId: string; degradaciones: number; caidas: number; saturaciones: number; inhabilitaciones: number; ultima_degradacion: string }
+export interface FilaTipo { tipo: string; incidencias: number }
+export interface FilaMttr { zonaId: string; nivelPrioridad: Nivel; resueltas: number; mttr_min: number; mediana_min: number; maximo_min: number }
+export interface FilaColectivo { incidenteColectivoId: string; zonaId: string; usuariosDistintos: number; totalIncidencias: number; detectado_en: string }
+export interface FilaRecurrencia { zonaId: string; colectivos: number; primer_colectivo: string; ultimo_colectivo: string; es_recurrente: boolean }
+export interface FilasPorReporte {
+  top_zonas: FilaTopZona; top_antenas: FilaTopAntena; tipos_problema: FilaTipo;
+  mttr: FilaMttr; colectivos: FilaColectivo; recurrencia: FilaRecurrencia;
+}
+export interface RespuestaAnalitica<R extends Reporte = Reporte> {
+  reporte: R; dias: number; total: number; filas: FilasPorReporte[R][]; cache: boolean;
+}
+
 /** Contrato común del cliente real y del modo demostración. */
 export interface Api {
   crearReporte(r: NuevoReporte): Promise<{ incidenciaId: string; estado: 'REGISTRADA' }>;
@@ -107,6 +124,7 @@ export interface Api {
   cambiarEstado(id: string, estadoNuevo: Estado, comentario?: string): Promise<Incidencia>;
   listarZonas(): Promise<Zona[]>;
   listarAntenas(f?: { zonaId?: string; estado?: EstadoAntena | '' }): Promise<Antena[]>;
+  analitica<R extends Reporte>(reporte: R, dias?: number): Promise<RespuestaAnalitica<R>>;
   /** Solo demo: cambia el rol activo. */
   setRolDemo?(rol: Rol): void;
 }
