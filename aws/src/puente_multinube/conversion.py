@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 
 SPECVERSION = "1.0"
@@ -53,18 +52,3 @@ def a_cloudevent(evento: dict) -> dict:
     if subject:
         ce["subject"] = str(subject)
     return ce
-
-
-def atributos_pubsub(ce: dict) -> dict[str, str]:
-    """Atributos del mensaje de Pub/Sub: ce_type, ce_id y zonaId si existe."""
-    atributos = {"ce_type": ce["type"], "ce_id": ce["id"]}
-    zona = _zona_id(ce.get("data") or {})
-    if zona:
-        atributos["zonaId"] = str(zona)
-    return atributos
-
-
-def mensaje_pubsub(ce: dict) -> dict:
-    """Mensaje para `topics.publish`: `data` = el CloudEvent completo en JSON (base64)."""
-    cuerpo = json.dumps(ce, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
-    return {"data": base64.b64encode(cuerpo).decode("ascii"), "attributes": atributos_pubsub(ce)}

@@ -1,6 +1,7 @@
 """Azure Functions (modelo de programación Python v2): replicar y api_estado."""
 import json
 import logging
+import os
 
 import azure.functions as func
 
@@ -11,6 +12,7 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 _repo = None
 _notificador = None
+_respaldo = None
 
 
 def _obtener_repo():
@@ -29,12 +31,26 @@ def _obtener_notificador():
     return _notificador
 
 
+def _obtener_respaldo():
+    """Respaldo en Blob Storage; None si no hay RESPALDO_BLOB_ENDPOINT (p. ej. en local)."""
+    global _respaldo
+    if _respaldo is None and os.environ.get("RESPALDO_BLOB_ENDPOINT"):
+        from telecorp_azure.respaldo import RespaldoBlob
+        _respaldo = RespaldoBlob()
+    return _respaldo
+
+
 @app.function_name(name="replicar")
 @app.event_grid_trigger(arg_name="evento")
 def replicar(evento) -> None:
     """Recibe CloudEvents del tema de Event Grid. Si lanza, Event Grid reintenta y luego
     envía a dead letter."""
     cloudevent = cargar_cloudevent(evento)
+    respaldo = _obtener_respaldo()
+    if respaldo is not None:
+        # Primero el respaldo del evento crudo; si falla, se lanza y Event Grid reintenta.
+        creado = respaldo.guardar(cloudevent)
+        logging.info("respaldo: %s", "creado" if creado else "ya existía")
     resultado = procesar_evento(cloudevent, _obtener_repo(), _obtener_notificador())
     logging.info("replicar: %s", resultado)
 

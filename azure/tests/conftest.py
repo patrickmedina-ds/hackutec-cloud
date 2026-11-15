@@ -115,3 +115,27 @@ def notificacion(canal="SMS", **extra) -> dict:
             "mensaje": "Identificamos una falla en tu zona.", "error": "SNS.ThrottledException"}
     base.update(extra)
     return base
+
+
+class ContenedorFalso:
+    """ContainerClient en memoria: `upload_blob` respeta `overwrite=False`."""
+
+    def __init__(self):
+        self.blobs: dict[str, bytes] = {}
+        self.llamadas: list[dict] = []
+        self.falla: Exception | None = None
+
+    def upload_blob(self, name, data, overwrite=False, **kwargs):
+        from telecorp_azure.respaldo import ResourceExistsError
+
+        self.llamadas.append({"name": name, "overwrite": overwrite, **kwargs})
+        if self.falla:
+            raise self.falla
+        if name in self.blobs and not overwrite:
+            raise ResourceExistsError("BlobAlreadyExists")
+        self.blobs[name] = data
+
+
+@pytest.fixture
+def contenedor():
+    return ContenedorFalso()

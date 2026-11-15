@@ -11,7 +11,6 @@ from telecorp_comun import nombres
 TTL_SEGUNDOS = int(os.environ.get("CONFIG_TTL_SEGUNDOS", "300"))
 
 CLAVES = {
-    "gcp_wif_config": "gcp/wif-config",
     "azure_tenant_id": "azure/tenant-id",
     "azure_client_id": "azure/client-id",
     "azure_eventgrid_endpoint": "azure/eventgrid-endpoint",
@@ -27,7 +26,7 @@ def stage() -> str:
 
 
 def nombre_tema() -> str:
-    """Tema de Pub/Sub y de Event Grid: `telecorp-<stage>-eventos` (contratos/README.md)."""
+    """Tema de Event Grid: `telecorp-<stage>-eventos` (contratos/README.md)."""
     return nombres.recurso("eventos")
 
 
@@ -36,7 +35,7 @@ def nombre_parametro(clave: str) -> str:
 
 
 class Configuracion:
-    """Lee los cuatro parámetros en una sola llamada `GetParameters` y los cachea."""
+    """Lee los parámetros en una sola llamada `GetParameters` y los cachea."""
 
     def __init__(self, cliente_ssm=None, ttl: int = TTL_SEGUNDOS, reloj=time.monotonic):
         self._ssm = cliente_ssm

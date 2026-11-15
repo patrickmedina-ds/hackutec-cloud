@@ -53,10 +53,12 @@ resource "azurerm_function_app_flex_consumption" "main" {
   }
 
   site_config {
-    cors_allowed_origins = concat(
-      ["https://${azurerm_static_web_app.estado.default_host_name}"],
-      var.cors_origenes_extra,
-    )
+    cors {
+      allowed_origins = concat(
+        ["https://${azurerm_static_web_app.estado.default_host_name}"],
+        var.cors_origenes_extra,
+      )
+    }
   }
 
   app_settings = {
@@ -67,6 +69,8 @@ resource "azurerm_function_app_flex_consumption" "main" {
     COSMOS_CONTENEDOR_INCIDENCIAS         = azurerm_cosmosdb_sql_container.incidencias.name
     COSMOS_CONTENEDOR_ZONAS               = azurerm_cosmosdb_sql_container.zonas.name
     COSMOS_CONTENEDOR_EVENTOS             = azurerm_cosmosdb_sql_container.eventos_procesados.name
+    RESPALDO_BLOB_ENDPOINT                = azurerm_storage_account.respaldo.primary_blob_endpoint
+    RESPALDO_CONTENEDOR                   = azurerm_storage_container.respaldo.name
     ACS_ENDPOINT                          = "https://${azurerm_communication_service.main.hostname}"
     # ACS (SMS y correo) se autentica con la cadena de conexión; ver CAMBIOS_PROPUESTOS_E.md.
     ACS_CONNECTION_STRING = azurerm_communication_service.main.primary_connection_string
