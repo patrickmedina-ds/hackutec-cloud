@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Red TeleCorp - bloque G. Lambda clasificar-ia (Gemini en Vertex AI con respaldo por reglas).
+Description: Red TeleCorp - bloque G. Lambda clasificar-ia (Amazon Bedrock con respaldo por reglas).
 
 Parameters:
   Stage:
@@ -9,10 +9,16 @@ Parameters:
   ComunLayerArn:
     Type: String
     Description: ARN de la capa telecorp_comun
+  ModeloIa:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    Description: >-
+      ID del modelo o perfil de inferencia de Bedrock (variable MODELO_IA). Se puede cambiar a un
+      modelo más nuevo disponible en la cuenta (con acceso habilitado en Bedrock); si es un
+      perfil de otra geografía (eu., apac.) ajusta también los permisos IAM.
 
 Resources:
-  # Rol con nombre fijo: la federación de GCP (bloque B) confía en este nombre.
-  # Requiere CAPABILITY_NAMED_IAM al desplegar.
+  # Rol con nombre fijo. Requiere CAPABILITY_NAMED_IAM al desplegar.
   ClasificarIaRol:
     Type: AWS::IAM::Role
     Properties:
@@ -27,24 +33,25 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: leer-parametros-gcp
+        - PolicyName: invocar-bedrock
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
-                  - ssm:GetParameter
-                  - ssm:GetParameters
+                  - bedrock:InvokeModel
                 Resource:
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/gcp/wif-config
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/gcp/project-id
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/gcp/region
+                  # Perfil de inferencia (el perfil "us." enruta entre regiones de EE. UU.).
+                  - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${ModeloIa}
+                  # Modelos base subyacentes: región con comodín porque el perfil
+                  # puede atender la solicitud desde cualquier región del grupo.
+                  - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.*
 
   ClasificarIa:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub telecorp-${Stage}-clasificar-ia
-      Description: Clasifica incidencias, resume colectivos y redacta avisos con Gemini (respaldo por reglas)
+      Description: Clasifica incidencias, resume colectivos y redacta avisos con Amazon Bedrock (respaldo por reglas)
       CodeUri: ../src/clasificar_ia/
       Handler: app.handler
       Runtime: python3.12
@@ -58,12 +65,12 @@ Resources:
         Variables:
           STAGE: !Ref Stage
           POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-clasificar-ia
-          MODELO_GEMINI: gemini-2.5-flash
+          MODELO_IA: !Ref ModeloIa
 
 Outputs:
   ClasificarIaArn:
     Description: ARN de la Lambda clasificar-ia
     Value: !GetAtt ClasificarIa.Arn
   ClasificarIaRolArn:
-    Description: ARN del rol de ejecución (confiado por la federación de GCP)
+    Description: ARN del rol de ejecución 
     Value: !GetAtt ClasificarIaRol.Arn

@@ -1,7 +1,7 @@
 """Respaldo local: reglas por palabras clave y plantillas fijas.
 
 No depende de ninguna red ni servicio. Es lo que responde la Lambda cuando
-Vertex AI falla, tarda más de 8 s o devuelve algo inválido.
+Bedrock falla, tarda más de 8 s o devuelve algo inválido.
 """
 
 from __future__ import annotations

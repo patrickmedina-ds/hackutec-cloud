@@ -1,4 +1,4 @@
-"""Prompts (en español) y esquemas de respuesta de Gemini por acción."""
+"""Prompts (en español) y esquemas de respuesta de la herramienta de Bedrock por acción."""
 
 from __future__ import annotations
 
@@ -16,29 +16,29 @@ SISTEMA = (
 
 ESQUEMAS = {
     "CLASIFICAR": {
-        "type": "OBJECT",
+        "type": "object",
         "properties": {
-            "tipo": {"type": "STRING", "enum": list(TIPOS)},
-            "severidad": {"type": "STRING", "enum": list(SEVERIDADES)},
-            "resumen": {"type": "STRING"},
-            "confianza": {"type": "NUMBER"},
+            "tipo": {"type": "string", "enum": list(TIPOS)},
+            "severidad": {"type": "string", "enum": list(SEVERIDADES)},
+            "resumen": {"type": "string"},
+            "confianza": {"type": "number"},
         },
         "required": ["tipo", "severidad", "resumen", "confianza"],
     },
     "RESUMIR_COLECTIVO": {
-        "type": "OBJECT",
+        "type": "object",
         "properties": {
-            "resumen": {"type": "STRING"},
-            "severidad": {"type": "STRING", "enum": list(SEVERIDADES)},
-            "causaProbable": {"type": "STRING"},
+            "resumen": {"type": "string"},
+            "severidad": {"type": "string", "enum": list(SEVERIDADES)},
+            "causaProbable": {"type": "string"},
         },
         "required": ["resumen", "severidad", "causaProbable"],
     },
     "REDACTAR_AVISO": {
-        "type": "OBJECT",
+        "type": "object",
         "properties": {
-            "asunto": {"type": "STRING"},
-            "mensaje": {"type": "STRING"},
+            "asunto": {"type": "string"},
+            "mensaje": {"type": "string"},
         },
         "required": ["asunto", "mensaje"],
     },
