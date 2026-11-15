@@ -105,7 +105,7 @@ Resources:
         BucketARN: !GetAtt BucketAnalitica.Arn
         RoleARN: !Ref RolLabArn
         # El esquema de partición debe coincidir con la proyección de la tabla Glue.
-        Prefix: eventos/tipo=!{partitionKeyFromQuery:tipo}/anio=!{partitionKeyFromQuery:anio}/mes=!{partitionKeyFromQuery:mes}/dia=!{partitionKeyFromQuery:dia}/
+        Prefix: eventos/tipo=!{partitionKeyFromQuery:tipo}/fecha=!{partitionKeyFromQuery:fecha}/
         ErrorOutputPrefix: errores/!{firehose:error-output-type}/!{timestamp:yyyy/MM/dd}/
         # Con particionamiento dinámico el mínimo de buffer es 64 MB; el intervalo manda (60 s).
         BufferingHints:
@@ -122,7 +122,7 @@ Resources:
             - Type: MetadataExtraction
               Parameters:
                 - ParameterName: MetadataExtractionQuery
-                  ParameterValue: '{tipo: .["detail-type"], anio: .time[0:4], mes: .time[5:7], dia: .time[8:10]}'
+                  ParameterValue: '{tipo: .["detail-type"], fecha: .time[0:10]}'
                 - ParameterName: JsonParsingEngine
                   ParameterValue: JQ-1.6
             # JSON por línea: Firehose concatena registros, hay que agregar el salto de línea.
@@ -164,7 +164,8 @@ Resources:
         Name: !Sub telecorp_${Stage}
         Description: Eventos de Red TeleCorp (analítica)
 
-  # No usa crawlers: la proyección de particiones resuelve tipo/anio/mes/dia en la consulta.
+  # No usa crawlers: la proyección de particiones resuelve tipo/fecha en la consulta (pocas
+  # particiones: una por tipo y día desde el inicio del proyecto).
   TablaEventos:
     Type: AWS::Glue::Table
     Properties:
@@ -180,20 +181,15 @@ Resources:
           projection.enabled: "true"
           projection.tipo.type: enum
           projection.tipo.values: Incidencia.CambioEstado,Zona.UmbralSuperado,Antena.CambioEstado
-          projection.anio.type: integer
-          projection.anio.range: 2026,2035
-          projection.mes.type: integer
-          projection.mes.range: "1,12"
-          projection.mes.digits: "2"
-          projection.dia.type: integer
-          projection.dia.range: "1,31"
-          projection.dia.digits: "2"
-          storage.location.template: !Sub s3://${BucketAnalitica}/eventos/tipo=${!tipo}/anio=${!anio}/mes=${!mes}/dia=${!dia}/
+          projection.fecha.type: date
+          projection.fecha.format: yyyy-MM-dd
+          projection.fecha.range: 2026-11-01,NOW
+          projection.fecha.interval: "1"
+          projection.fecha.interval.unit: DAYS
+          storage.location.template: !Sub s3://${BucketAnalitica}/eventos/tipo=${!tipo}/fecha=${!fecha}/
         PartitionKeys:
           - { Name: tipo, Type: string }
-          - { Name: anio, Type: string }
-          - { Name: mes, Type: string }
-          - { Name: dia, Type: string }
+          - { Name: fecha, Type: string }
         StorageDescriptor:
           Location: !Sub s3://${BucketAnalitica}/eventos/
           InputFormat: org.apache.hadoop.mapred.TextInputFormat
@@ -258,7 +254,7 @@ Resources:
       Database: !Ref BaseDatos
       WorkGroup: !Ref GrupoTrabajoAthena
       # Subir este número al cambiar cualquier .sql para que se vuelvan a aplicar.
-      Revision: "1"
+      Revision: "3"
 
   # ---------------------------------------------------------------------------
   # Lambda de reportes para el panel del operador (la enruta el stack raíz)
@@ -413,18 +409,47 @@ Resources:
       WorkGroup: !Ref GrupoTrabajoAthena
       QueryString: !Sub |
         CREATE OR REPLACE VIEW ${BaseDatos}.v_colectivos AS
-        -- Incidentes colectivos (Zona.UmbralSuperado): linea de tiempo por zona.
+        -- Incidentes colectivos de los tres orígenes: USUARIO (umbral de 10 reportes), ANTENA
+        -- (detección proactiva) y RECURRENCIA. Una fila por incidencia COLECTIVA con su último estado.
+        WITH col AS (
+          SELECT
+            incidenciaId                                         AS incidenteColectivoId,
+            max_by(zonaId, ts)                                   AS zonaId,
+            max_by(origen, ts)                                   AS origen,
+            max_by(estadoNuevo, ts)                              AS estado,
+            max_by(nivelPrioridad, ts)                           AS nivelPrioridad,
+            min(ts)                                              AS detectado_en,
+            min(CASE WHEN estadoNuevo = 'SOLUCIONADA' THEN ts END) AS resuelto_en
+          FROM ${BaseDatos}.v_transiciones
+          WHERE clase = 'COLECTIVA'
+          GROUP BY incidenciaId
+        ),
+        hijos AS (
+          SELECT incidenteColectivoId, count(DISTINCT incidenciaId) AS totalIncidencias
+          FROM ${BaseDatos}.v_transiciones
+          WHERE clase = 'INDIVIDUAL' AND incidenteColectivoId IS NOT NULL
+          GROUP BY incidenteColectivoId
+        ),
+        umbral AS (
+          SELECT detalle.incidenteColectivoId AS incidenteColectivoId, max(detalle.usuariosDistintos) AS usuariosDistintos
+          FROM ${BaseDatos}.v_eventos
+          WHERE ce_type = 'Zona.UmbralSuperado'
+          GROUP BY detalle.incidenteColectivoId
+        )
         SELECT
-          ce_id,
-          detalle.incidenteColectivoId                           AS incidenteColectivoId,
-          detalle.zonaId                                         AS zonaId,
-          detalle.usuariosDistintos                              AS usuariosDistintos,
-          TRY(CAST(from_iso8601_timestamp(detalle.ventanaInicio) AS timestamp)) AS ventanaInicio,
-          TRY(CAST(from_iso8601_timestamp(detalle.ventanaFin) AS timestamp))    AS ventanaFin,
-          cardinality(detalle.incidencias)                       AS totalIncidencias,
-          COALESCE(TRY(CAST(from_iso8601_timestamp(detalle.ventanaFin) AS timestamp)), ce_time) AS detectado_en
-        FROM ${BaseDatos}.v_eventos
-        WHERE ce_type = 'Zona.UmbralSuperado'
+          col.incidenteColectivoId,
+          col.zonaId,
+          col.origen,
+          col.estado,
+          col.nivelPrioridad,
+          COALESCE(umbral.usuariosDistintos, hijos.totalIncidencias, 0) AS usuariosDistintos,
+          COALESCE(hijos.totalIncidencias, 0)                    AS totalIncidencias,
+          col.detectado_en,
+          col.resuelto_en,
+          date_diff('minute', col.detectado_en, col.resuelto_en) AS minutos_hasta_resolver
+        FROM col
+        LEFT JOIN hijos  ON hijos.incidenteColectivoId  = col.incidenteColectivoId
+        LEFT JOIN umbral ON umbral.incidenteColectivoId = col.incidenteColectivoId
 
   ConsultaTopZonas:
     Type: AWS::Athena::NamedQuery

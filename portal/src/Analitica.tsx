@@ -3,6 +3,8 @@ import { ApiError, TIPOS } from './types';
 import type { Api, Dias, FilasPorReporte, Reporte, RespuestaAnalitica, Zona } from './types';
 import { Aviso, fmtFecha, nombreZona } from './ui';
 
+const ORIGEN: Record<string, string> = { USUARIO: 'Por reportes de usuarios', ANTENA: 'Detectado por antenas', RECURRENCIA: 'Recurrencia' };
+
 export const PERIODOS: Dias[] = [7, 30, 90];
 
 export function mensajeError(e: unknown): string {
@@ -138,8 +140,8 @@ export function Analitica({ api, zonas }: { api: Api; zonas: Zona[] }) {
             <ul className="an-lista">
               {f.map((r) => (
                 <li key={r.incidenteColectivoId}>
-                  <strong>{z(r.zonaId)}</strong> · {r.usuariosDistintos} usuarios · {r.totalIncidencias} incidencias
-                  <br /><span className="muted">Detectado {fecha(r.detectado_en)}</span>
+                  <strong>{z(r.zonaId)}</strong> · {ORIGEN[r.origen ?? ''] ?? 'Colectivo'}{r.nivelPrioridad ? ` · ${r.nivelPrioridad}` : ''} · {r.totalIncidencias} reportes agrupados
+                  <br /><span className="muted">Detectado {fecha(r.detectado_en)} · {r.minutos_hasta_resolver != null ? `resuelto en ${r.minutos_hasta_resolver} min` : 'en curso'}</span>
                 </li>
               ))}
             </ul>

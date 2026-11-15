@@ -105,7 +105,7 @@ export interface FilaTopZona { zonaId: string; incidencias: number; abiertas: nu
 export interface FilaTopAntena { antenaId: string; zonaId: string; degradaciones: number; caidas: number; saturaciones: number; inhabilitaciones: number; ultima_degradacion: string }
 export interface FilaTipo { tipo: string; incidencias: number }
 export interface FilaMttr { zonaId: string; nivelPrioridad: Nivel; resueltas: number; mttr_min: number; mediana_min: number; maximo_min: number }
-export interface FilaColectivo { incidenteColectivoId: string; zonaId: string; usuariosDistintos: number; totalIncidencias: number; detectado_en: string }
+export interface FilaColectivo { incidenteColectivoId: string; zonaId: string; origen?: string; estado?: string; nivelPrioridad?: string | null; usuariosDistintos: number; totalIncidencias: number; detectado_en: string; minutos_hasta_resolver?: number | null }
 export interface FilaRecurrencia { zonaId: string; colectivos: number; primer_colectivo: string; ultimo_colectivo: string; es_recurrente: boolean }
 export interface FilasPorReporte {
   top_zonas: FilaTopZona; top_antenas: FilaTopAntena; tipos_problema: FilaTipo;

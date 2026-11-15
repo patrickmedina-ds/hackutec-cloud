@@ -63,8 +63,10 @@ REPORTES: dict[str, str] = {
         ORDER BY mttr_min DESC
         LIMIT 100""",
     "colectivos": f"""
-        SELECT incidenteColectivoId, zonaId, usuariosDistintos, totalIncidencias,
-               CAST(detectado_en AS varchar) AS detectado_en
+        SELECT incidenteColectivoId, zonaId, origen, estado, nivelPrioridad,
+               usuariosDistintos, totalIncidencias,
+               CAST(detectado_en AS varchar) AS detectado_en,
+               minutos_hasta_resolver
         FROM {{db}}.v_colectivos
         WHERE detectado_en >= {_VENTANA}
         ORDER BY detectado_en DESC
