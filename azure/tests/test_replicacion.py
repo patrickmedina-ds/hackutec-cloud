@@ -201,3 +201,52 @@ def test_acs_correo_incluye_html_y_texto(monkeypatch):
     c = enviados[0]["content"]
     assert c["plainText"] == "Hola" and "Incidencia identificada" in c["html"]
     assert enviados[0]["senderAddress"] == "no-responder@x.azurecomm.net"
+
+
+def test_cargar_cloudevent_desde_eventgridevent_del_runtime():
+    """El runtime de Python entrega func.EventGridEvent: metadatos en atributos y data en get_json()."""
+    from datetime import datetime, timezone
+
+    from telecorp_azure.replicacion import cargar_cloudevent
+
+    class EventoRuntime:
+        id = "ev-1"
+        event_type = "Incidencia.CambioEstado"
+        topic = "telecorp/aws/telecorp.incidencias"
+        subject = "LIM-SJL-01"
+        event_time = datetime(2026, 11, 15, 22, 50, tzinfo=timezone.utc)
+
+        def get_json(self):
+            return {"incidenciaId": "i-1", "estadoNuevo": "EN_REVISION"}
+
+    ce = cargar_cloudevent(EventoRuntime())
+    assert ce["id"] == "ev-1"
+    assert ce["type"] == "Incidencia.CambioEstado"
+    assert ce["data"]["incidenciaId"] == "i-1"
+    assert ce["time"].startswith("2026-11-15T22:50")
+
+
+def test_cargar_cloudevent_deduce_el_tipo_si_el_runtime_lo_pierde():
+    from telecorp_azure.replicacion import cargar_cloudevent
+
+    class EventoSinTipo:
+        id = "ev-2"
+        event_type = None
+        topic = None
+        subject = "LIM-SJL-01"
+        event_time = None
+
+        def __init__(self, datos):
+            self._datos = datos
+
+        def get_json(self):
+            return self._datos
+
+    casos = {
+        "Incidencia.CambioEstado": {"incidenciaId": "i", "estadoNuevo": "EN_REVISION", "snapshot": {}},
+        "Zona.UmbralSuperado": {"zonaId": "z", "usuariosDistintos": 10},
+        "Antena.CambioEstado": {"antenaId": "a", "zonaId": "z", "gbPorMinuto": 0},
+        "Notificacion.Solicitada": {"incidenciaId": "i", "canal": "EMAIL", "destino": "x@example.com"},
+    }
+    for tipo, datos in casos.items():
+        assert cargar_cloudevent(EventoSinTipo(datos))["type"] == tipo

@@ -245,6 +245,21 @@ def procesar_evento(evento: dict, repo: Repositorio, notificador: Notificador) -
         raise
 
 
+def _tipo_por_campos(datos: Any) -> str | None:
+    """Tipo de evento según los campos obligatorios de cada `detail` del contrato."""
+    if not isinstance(datos, dict):
+        return None
+    if "estadoNuevo" in datos and "snapshot" in datos:
+        return "Incidencia.CambioEstado"
+    if "usuariosDistintos" in datos:
+        return "Zona.UmbralSuperado"
+    if "antenaId" in datos and "gbPorMinuto" in datos:
+        return "Antena.CambioEstado"
+    if "canal" in datos and "destino" in datos:
+        return "Notificacion.Solicitada"
+    return None
+
+
 def cargar_cloudevent(entrada: Any) -> dict:
     """Normaliza lo que entrega el disparador (str, bytes, dict u objeto con get_json)."""
     import json
@@ -254,7 +269,23 @@ def cargar_cloudevent(entrada: Any) -> dict:
     if isinstance(entrada, str):
         entrada = json.loads(entrada)
     if hasattr(entrada, "get_json"):
-        entrada = entrada.get_json()
+        # func.EventGridEvent: los metadatos vienen como atributos y get_json() trae solo `data`.
+        # Con CloudEvents, el conversor lee `eventType`/`eventTime` (esquema Event Grid) y deja el
+        # tipo vacío; se deduce de los campos propios de cada evento (contratos/eventos.md).
+        datos = entrada.get_json()
+        if getattr(entrada, "id", None):
+            hora = getattr(entrada, "event_time", None)
+            entrada = {
+                "specversion": "1.0",
+                "id": entrada.id,
+                "type": getattr(entrada, "event_type", None) or _tipo_por_campos(datos),
+                "source": getattr(entrada, "topic", None) or "",
+                "subject": getattr(entrada, "subject", None),
+                "time": hora.isoformat() if hasattr(hora, "isoformat") else hora,
+                "data": datos,
+            }
+        else:
+            entrada = datos
     if isinstance(entrada, list) and len(entrada) == 1:
         entrada = entrada[0]
     if not isinstance(entrada, dict):

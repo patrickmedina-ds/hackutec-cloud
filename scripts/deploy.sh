@@ -168,6 +168,12 @@ info "Segunda pasada de Terraform en Azure: suscripción de Event Grid hacia rep
 terraform -chdir="$AZ_DIR" apply -input=false -auto-approve "${VARS_AZ[@]}" \
   -var "crear_suscripcion_eventgrid=true"
 
+# El recurso Flex Consumption reinyecta AzureWebJobsStorage con llave compartida, y el host la
+# rechaza (firma MAC inválida). El host usa AzureWebJobsStorage__accountName con identidad.
+az functionapp config appsettings delete -g "$(tf_salida "$AZ_DIR" grupo_recursos)" -n "$FUNCTION_APP" \
+  --setting-names AzureWebJobsStorage -o none
+info "Host de Functions configurado con identidad administrada para su almacenamiento."
+
 [[ -d "$SWA_DIR" ]] || morir "No existe la página de estado: $SWA_DIR"
 API_ESTADO="$(tf_salida "$AZ_DIR" api_estado_url)"
 printf 'window.TELECORP_API = window.TELECORP_API || "%s";\n' "$API_ESTADO" > "${SWA_DIR}/config.js"
