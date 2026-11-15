@@ -28,7 +28,9 @@ resource "azurerm_storage_account" "respaldo" {
   min_tls_version                 = "TLS1_2"
   https_traffic_only_enabled      = true
   allow_nested_items_to_be_public = false
-  shared_access_key_enabled       = false # solo Entra ID, sin llaves
+  # Terraform administra el contenedor por el plano de datos con llave compartida; la Function
+  # escribe con su identidad administrada (Storage Blob Data Contributor), sin llaves.
+  shared_access_key_enabled       = true
   tags                            = local.etiquetas
 
   blob_properties {
