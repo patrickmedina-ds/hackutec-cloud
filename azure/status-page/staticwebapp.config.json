@@ -1,0 +1,15 @@
+{
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": ["/*.css", "/*.js", "/*.json", "/*.ico", "/*.png", "/*.svg"]
+  },
+  "globalHeaders": {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-cache"
+  },
+  "mimeTypes": {
+    ".json": "application/json"
+  }
+}

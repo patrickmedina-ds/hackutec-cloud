@@ -1,0 +1,10 @@
+stage    = "dev"
+location = "eastus2"
+
+# subscription_id = "00000000-0000-0000-0000-000000000000"
+
+# Paso 1: false. Tras publicar las funciones, cambiar a true y volver a aplicar.
+crear_suscripcion_eventgrid = false
+
+# Número de SMS comprado en el portal de Azure (opcional; ver variables.tf).
+# sms_numero_remitente = "+18005550100"

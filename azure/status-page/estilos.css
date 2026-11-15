@@ -1,0 +1,87 @@
+:root {
+  --fondo: #f5f7fa;
+  --tarjeta: #ffffff;
+  --texto: #1b2430;
+  --suave: #5b6675;
+  --borde: #dde3ea;
+  --normal: #1a7f43;
+  --evaluacion: #a86400;
+  --incidencia: #b42318;
+  --restablecido: #0b5fb0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #0f141a;
+    --tarjeta: #19212b;
+    --texto: #e8edf3;
+    --suave: #9aa6b4;
+    --borde: #2b3644;
+    --normal: #4cc27f;
+    --evaluacion: #f0b429;
+    --incidencia: #ff6b5e;
+    --restablecido: #6cb6ff;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.cabecera, main, footer { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+.cabecera { padding-top: 24px; }
+h1 { margin: 0; font-size: 1.6rem; }
+.subtitulo { margin: 4px 0 16px; color: var(--suave); }
+
+.resumen {
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--borde);
+  background: var(--tarjeta);
+  font-weight: 600;
+}
+.resumen.ok { border-color: var(--normal); color: var(--normal); }
+.resumen.alerta { border-color: var(--evaluacion); color: var(--evaluacion); }
+
+.actualizacion { color: var(--suave); font-size: .9rem; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.actualizacion button {
+  margin-left: auto;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  background: var(--tarjeta);
+  color: var(--texto);
+  font: inherit;
+  cursor: pointer;
+}
+
+.zonas { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.zona {
+  background: var(--tarjeta);
+  border: 1px solid var(--borde);
+  border-left: 6px solid var(--normal);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.zona-cab { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.zona-nombre { font-weight: 600; overflow-wrap: anywhere; }
+.etiqueta { font-size: .85rem; font-weight: 600; }
+.zona-detalle { margin: 4px 0 0; color: var(--suave); font-size: .9rem; }
+
+.estado-normal { border-left-color: var(--normal); }
+.estado-normal .etiqueta { color: var(--normal); }
+.estado-en_evaluacion { border-left-color: var(--evaluacion); }
+.estado-en_evaluacion .etiqueta { color: var(--evaluacion); }
+.estado-incidencia_identificada { border-left-color: var(--incidencia); }
+.estado-incidencia_identificada .etiqueta { color: var(--incidencia); }
+.estado-restablecido { border-left-color: var(--restablecido); }
+.estado-restablecido .etiqueta { color: var(--restablecido); }
+
+.error { color: var(--incidencia); font-size: .9rem; }
+footer { padding-top: 16px; padding-bottom: 32px; color: var(--suave); font-size: .85rem; }

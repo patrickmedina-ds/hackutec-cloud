@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Estado del servicio · Red TeleCorp</title>
+  <link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+  <header class="cabecera">
+    <h1>Estado del servicio</h1>
+    <p class="subtitulo">Red TeleCorp · estado por zona</p>
+  </header>
+
+  <main>
+    <section id="resumen" class="resumen" aria-live="polite">Cargando…</section>
+    <p class="actualizacion">
+      Última actualización: <time id="hora">—</time>
+      <button id="recargar" type="button">Actualizar</button>
+    </p>
+    <ul id="zonas" class="zonas"></ul>
+    <p id="error" class="error" role="alert" hidden></p>
+  </main>
+
+  <footer>
+    <p>Si tu zona aparece en evaluación o con incidencia, ya estamos trabajando en ello.
+       Puedes reportar un problema desde el portal de clientes.</p>
+  </footer>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
