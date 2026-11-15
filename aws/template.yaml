@@ -13,10 +13,13 @@ Parameters:
     Type: String
     Default: http://localhost:5173/
     Description: URL del portal en desarrollo local (callback y logout de Cognito)
-  UrlsPortalAdicionales:
-    Type: CommaDelimitedList
+  UrlPortal:
+    Type: String
     Default: ''
-    Description: Otras URLs de callback/logout del portal (opcional)
+    Description: >-
+      URL HTTPS del portal publicado en Azure Static Web Apps (callback y logout de Cognito).
+      El Learner Lab bloquea CloudFront, así que el portal se aloja en Azure; deploy.sh la pasa
+      en una segunda pasada de sam deploy.
   CorsOrigen:
     Type: String
     Default: '*'
@@ -40,7 +43,7 @@ Parameters:
     Description: Rol del Learner Lab (no se pueden crear roles IAM); lo usan Lambdas, SFN, Pipes, Firehose, Scheduler, IoT y API Gateway
 
 Conditions:
-  HayUrlsAdicionales: !Not [!Equals [!Join ['', !Ref UrlsPortalAdicionales], '']]
+  HayUrlPortal: !Not [!Equals [!Ref UrlPortal, '']]
 
 Globals:
   Function:
@@ -353,27 +356,13 @@ Resources:
       AllowedOAuthScopes: [openid, email, profile]
       SupportedIdentityProviders: [COGNITO]
       CallbackURLs: !If
-        - HayUrlsAdicionales
-        - !Split
-          - ','
-          - !Join
-            - ','
-            - - !Ref UrlLocalPortal
-              - !Sub https://${Distribucion.DomainName}/
-              - !Join [',', !Ref UrlsPortalAdicionales]
-        - - !Ref UrlLocalPortal
-          - !Sub https://${Distribucion.DomainName}/
+        - HayUrlPortal
+        - [!Ref UrlLocalPortal, !Ref UrlPortal]
+        - [!Ref UrlLocalPortal]
       LogoutURLs: !If
-        - HayUrlsAdicionales
-        - !Split
-          - ','
-          - !Join
-            - ','
-            - - !Ref UrlLocalPortal
-              - !Sub https://${Distribucion.DomainName}/
-              - !Join [',', !Ref UrlsPortalAdicionales]
-        - - !Ref UrlLocalPortal
-          - !Sub https://${Distribucion.DomainName}/
+        - HayUrlPortal
+        - [!Ref UrlLocalPortal, !Ref UrlPortal]
+        - [!Ref UrlLocalPortal]
       PreventUserExistenceErrors: ENABLED
       EnableTokenRevocation: true
       AccessTokenValidity: 60
@@ -754,82 +743,8 @@ Resources:
                 Type: SQS
                 Destination: !GetAtt ColaTelemetriaDlq.Arn
 
-  # ------------------------------------------------------------------ Hosting del portal
-  BucketPortal:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub telecorp-${Stage}-portal-${AWS::AccountId}
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
-
-  OacPortal:
-    Type: AWS::CloudFront::OriginAccessControl
-    Properties:
-      OriginAccessControlConfig:
-        Name: !Sub telecorp-${Stage}-portal-oac
-        OriginAccessControlOriginType: s3
-        SigningBehavior: always
-        SigningProtocol: sigv4
-
-  Distribucion:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Enabled: true
-        Comment: !Sub Portal Red TeleCorp (${Stage})
-        DefaultRootObject: index.html
-        HttpVersion: http2and3
-        PriceClass: PriceClass_100
-        Origins:
-          - Id: portal-s3
-            DomainName: !GetAtt BucketPortal.RegionalDomainName
-            OriginAccessControlId: !GetAtt OacPortal.Id
-            S3OriginConfig:
-              OriginAccessIdentity: ''
-        DefaultCacheBehavior:
-          TargetOriginId: portal-s3
-          ViewerProtocolPolicy: redirect-to-https
-          AllowedMethods: [GET, HEAD, OPTIONS]
-          CachedMethods: [GET, HEAD]
-          Compress: true
-          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
-          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy
-        # Reescritura de SPA: rutas del lado del cliente devuelven index.html
-        CustomErrorResponses:
-          - { ErrorCode: 403, ResponseCode: 200, ResponsePagePath: /index.html, ErrorCachingMinTTL: 0 }
-          - { ErrorCode: 404, ResponseCode: 200, ResponsePagePath: /index.html, ErrorCachingMinTTL: 0 }
-
-  PoliticaBucketPortal:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref BucketPortal
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: SoloCloudFront
-            Effect: Allow
-            Principal: { Service: cloudfront.amazonaws.com }
-            Action: s3:GetObject
-            Resource: !Sub ${BucketPortal.Arn}/*
-            Condition:
-              StringEquals:
-                'AWS:SourceArn': !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribucion}
-          - Sid: SoloTLS
-            Effect: Deny
-            Principal: '*'
-            Action: s3:*
-            Resource: [!GetAtt BucketPortal.Arn, !Sub '${BucketPortal.Arn}/*']
-            Condition:
-              Bool: { 'aws:SecureTransport': 'false' }
+  # El portal se aloja en Azure Static Web Apps (azure/terraform/estatica.tf): el Learner Lab
+  # bloquea CloudFront y un bucket S3 con sitio web no ofrece HTTPS, que Cognito exige.
 
   # ------------------------------------------------------------------ Alarmas
   TemaAlarmas:
@@ -1043,12 +958,6 @@ Outputs:
   CognitoDomain:
     Description: Dominio del managed login de Cognito
     Value: !Sub ${UserPoolDominio}.auth.${AWS::Region}.amazoncognito.com
-  PortalBucket:
-    Value: !Ref BucketPortal
-  CloudFrontDomain:
-    Value: !GetAtt Distribucion.DomainName
-  CloudFrontDistributionId:
-    Value: !Ref Distribucion
   BusEventosNombre:
     Description: Nombre del bus de eventos
     Value: !Ref BusEventos

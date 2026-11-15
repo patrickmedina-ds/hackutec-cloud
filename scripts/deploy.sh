@@ -112,36 +112,47 @@ paso "4/6" "Sembrando zonas y antenas en DynamoDB"
 "$PYTHON" "${RAIZ}/scripts/seed_dynamodb.py" --stage "$STAGE" --region "$REGION"
 
 # ---------------------------------------------------------------------------
-paso "5/6" "Portal: config.json, build, S3 sync e invalidación de CloudFront"
+paso "5/6" "Portal: callback de Cognito, config.json, build y Azure Static Web App"
+# El Learner Lab bloquea CloudFront: el portal vive en Azure Static Web Apps (HTTPS).
 PORTAL="${RAIZ}/portal"
 [[ -d "$PORTAL" ]] || morir "No existe la carpeta del portal: $PORTAL"
+URL_PORTAL="$(tf_salida "$AZ_DIR" portal_url)"
+
+info "Registrando ${URL_PORTAL} como callback de Cognito (segunda pasada de sam deploy)"
+(
+  cd "${RAIZ}/aws"
+  sam deploy \
+    --stack-name "$STACK" \
+    --region "$REGION" \
+    --resolve-s3 \
+    --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+    --no-confirm-changeset \
+    --no-fail-on-empty-changeset \
+    --parameter-overrides "Stage=${STAGE}" "UrlPortal=${URL_PORTAL}"
+)
 
 aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
   --query 'Stacks[0].Outputs' --output json \
-  | REGION="$REGION" "$PYTHON" -c 'import json, os, sys
+  | REGION="$REGION" URL_PORTAL="$URL_PORTAL" "$PYTHON" -c 'import json, os, sys
 salidas = {s["OutputKey"]: s["OutputValue"] for s in json.load(sys.stdin)}
-dominio = salidas["CloudFrontDomain"]
 json.dump({
     "apiUrl": salidas["ApiUrl"],
     "region": os.environ["REGION"],
     "cognitoDomain": salidas["CognitoDomain"],
     "clientId": salidas["UserPoolClientId"],
-    "redirectUri": dominio if dominio.startswith("https://") else f"https://{dominio}/",
+    "redirectUri": os.environ["URL_PORTAL"],
 }, sys.stdout, indent=2)
 print()' > "${PORTAL}/public/config.json"
-info "portal/public/config.json generado desde los outputs de CloudFormation."
+info "portal/public/config.json generado."
 
 (
   cd "$PORTAL"
   if [[ -f package-lock.json ]]; then npm ci; else npm install; fi
   npm run build
 )
-
-BUCKET="$(cfn_salida PortalBucket)"
-DISTRIBUCION="$(cfn_salida CloudFrontDistributionId)"
-aws s3 sync "${PORTAL}/dist" "s3://${BUCKET}" --delete --region "$REGION"
-aws cloudfront create-invalidation --distribution-id "$DISTRIBUCION" --paths "/*" >/dev/null
-info "Portal publicado en s3://${BUCKET} e invalidación de CloudFront ${DISTRIBUCION} creada."
+npx --yes @azure/static-web-apps-cli deploy "${PORTAL}/dist" \
+  --deployment-token "$(tf_salida "$AZ_DIR" portal_token)" --env production
+info "Portal publicado en ${URL_PORTAL}"
 
 # ---------------------------------------------------------------------------
 paso "6/6" "Azure: Functions, suscripción de Event Grid y página de estado"

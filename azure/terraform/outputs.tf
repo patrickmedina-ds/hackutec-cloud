@@ -48,3 +48,14 @@ output "openai_deployment" {
 output "grupo_recursos" {
   value = azurerm_resource_group.main.name
 }
+
+output "portal_url" {
+  description = "URL HTTPS del portal de incidencias (callback de Cognito)."
+  value       = "https://${azurerm_static_web_app.portal.default_host_name}/"
+}
+
+output "portal_token" {
+  description = "Token de despliegue de la Static Web App del portal."
+  value       = azurerm_static_web_app.portal.api_key
+  sensitive   = true
+}

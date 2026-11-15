@@ -39,17 +39,7 @@ if [[ "$confirmacion" != "eliminar ${STACK}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-paso "1/4" "Portal: vaciar el bucket de S3 (CloudFormation no borra buckets con objetos)"
-if stack_existe; then
-  BUCKET="$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
-    --query "Stacks[0].Outputs[?OutputKey=='PortalBucket'].OutputValue" --output text)"
-  if [[ -n "$BUCKET" && "$BUCKET" != "None" ]]; then
-    aws s3 rm "s3://${BUCKET}" --recursive --region "$REGION"
-    info "Bucket ${BUCKET} vaciado."
-  fi
-else
-  advertir "El stack ${STACK} no existe en AWS; se omite el vaciado del bucket."
-fi
+paso "1/4" "Portal: alojado en Azure Static Web Apps; se elimina con terraform destroy"
 
 # ---------------------------------------------------------------------------
 paso "2/4" "SSM: eliminar los parámetros /telecorp/${STAGE}/"
