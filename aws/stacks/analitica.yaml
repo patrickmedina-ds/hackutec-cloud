@@ -1,0 +1,719 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Red TeleCorp - analítica. Reemplaza BigQuery/Looker Studio: EventBridge -> Firehose -> S3
+  (JSON por línea, particionado por tipo y fecha) -> Glue/Athena con vistas, más la Lambda
+  api-analitica que sirve reportes predefinidos al panel del operador.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedPattern: "^[a-z0-9-]+$"
+  ComunLayerArn:
+    Type: String
+    Description: ARN de la capa telecorp_comun (la crea el stack raíz).
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Bucket del lago de eventos y de resultados de Athena
+  # ---------------------------------------------------------------------------
+  BucketAnalitica:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub telecorp-${Stage}-analitica-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: eventos-a-ia-30d
+            Status: Enabled
+            Prefix: eventos/
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+          - Id: resultados-athena-30d
+            Status: Enabled
+            Prefix: athena-resultados/
+            ExpirationInDays: 30
+          - Id: errores-firehose-90d
+            Status: Enabled
+            Prefix: errores/
+            ExpirationInDays: 90
+          - Id: multipart-incompleto
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 2
+
+  BucketAnaliticaPolitica:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketAnalitica
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SoloTLS
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt BucketAnalitica.Arn
+              - !Sub ${BucketAnalitica.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # ---------------------------------------------------------------------------
+  # Firehose: eventos telecorp.* (sin Notificacion.Fallida, lleva PII) -> S3
+  # ---------------------------------------------------------------------------
+  FirehoseLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/kinesisfirehose/telecorp-${Stage}-eventos
+      RetentionInDays: 14
+
+  FirehoseLogsStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref FirehoseLogs
+      LogStreamName: entrega-s3
+
+  FirehoseRol:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub telecorp-${Stage}-analitica-firehose-rol
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: entrega-s3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:PutObject
+                Resource:
+                  - !GetAtt BucketAnalitica.Arn
+                  - !Sub ${BucketAnalitica.Arn}/*
+              - Effect: Allow
+                Action: logs:PutLogEvents
+                Resource: !GetAtt FirehoseLogs.Arn
+
+  FirehoseEventos:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Sub telecorp-${Stage}-eventos
+      DeliveryStreamType: DirectPut
+      DeliveryStreamEncryptionConfigurationInput:
+        KeyType: AWS_OWNED_CMK
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !GetAtt BucketAnalitica.Arn
+        RoleARN: !GetAtt FirehoseRol.Arn
+        # El esquema de partición debe coincidir con la proyección de la tabla Glue.
+        Prefix: eventos/tipo=!{partitionKeyFromQuery:tipo}/anio=!{partitionKeyFromQuery:anio}/mes=!{partitionKeyFromQuery:mes}/dia=!{partitionKeyFromQuery:dia}/
+        ErrorOutputPrefix: errores/!{firehose:error-output-type}/!{timestamp:yyyy/MM/dd}/
+        # Con particionamiento dinámico el mínimo de buffer es 64 MB; el intervalo manda (60 s).
+        BufferingHints:
+          IntervalInSeconds: 60
+          SizeInMBs: 64
+        CompressionFormat: GZIP
+        DynamicPartitioningConfiguration:
+          Enabled: true
+          RetryOptions:
+            DurationInSeconds: 300
+        ProcessingConfiguration:
+          Enabled: true
+          Processors:
+            - Type: MetadataExtraction
+              Parameters:
+                - ParameterName: MetadataExtractionQuery
+                  ParameterValue: '{tipo: .["detail-type"], anio: .time[0:4], mes: .time[5:7], dia: .time[8:10]}'
+                - ParameterName: JsonParsingEngine
+                  ParameterValue: JQ-1.6
+            # JSON por línea: Firehose concatena registros, hay que agregar el salto de línea.
+            - Type: AppendDelimiterToRecord
+              Parameters:
+                - ParameterName: Delimiter
+                  ParameterValue: "\\n"
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Ref FirehoseLogs
+          LogStreamName: !Ref FirehoseLogsStream
+
+  EventosAFirehoseRol:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub telecorp-${Stage}-analitica-eventos-rol
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: poner-registros
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - firehose:PutRecord
+                  - firehose:PutRecordBatch
+                Resource: !GetAtt FirehoseEventos.Arn
+
+  ReglaAnalitica:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub telecorp-${Stage}-analitica-eventos
+      Description: Eventos telecorp.* al lago de analítica (excluye Notificacion.Fallida por PII)
+      EventBusName: !Sub telecorp-${Stage}-eventos
+      State: ENABLED
+      EventPattern:
+        source:
+          - prefix: telecorp.
+        detail-type:
+          - anything-but:
+              - Notificacion.Fallida
+      Targets:
+        - Id: firehose-eventos
+          Arn: !GetAtt FirehoseEventos.Arn
+          RoleArn: !GetAtt EventosAFirehoseRol.Arn
+
+  # ---------------------------------------------------------------------------
+  # Glue + Athena
+  # ---------------------------------------------------------------------------
+  BaseDatos:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub telecorp_${Stage}
+        Description: Eventos de Red TeleCorp (analítica)
+
+  # No usa crawlers: la proyección de particiones resuelve tipo/anio/mes/dia en la consulta.
+  TablaEventos:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref BaseDatos
+      TableInput:
+        Name: eventos
+        Description: Sobre de EventBridge, un evento por línea JSON
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: json
+          EXTERNAL: "TRUE"
+          projection.enabled: "true"
+          projection.tipo.type: enum
+          projection.tipo.values: Incidencia.CambioEstado,Zona.UmbralSuperado,Antena.CambioEstado
+          projection.anio.type: integer
+          projection.anio.range: 2026,2035
+          projection.mes.type: integer
+          projection.mes.range: "1,12"
+          projection.mes.digits: "2"
+          projection.dia.type: integer
+          projection.dia.range: "1,31"
+          projection.dia.digits: "2"
+          storage.location.template: !Sub s3://${BucketAnalitica}/eventos/tipo=${!tipo}/anio=${!anio}/mes=${!mes}/dia=${!dia}/
+        PartitionKeys:
+          - { Name: tipo, Type: string }
+          - { Name: anio, Type: string }
+          - { Name: mes, Type: string }
+          - { Name: dia, Type: string }
+        StorageDescriptor:
+          Location: !Sub s3://${BucketAnalitica}/eventos/
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          Compressed: true
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "true"
+              mapping.detail_type: detail-type
+          Columns:
+            - { Name: id, Type: string }
+            - { Name: detail_type, Type: string }
+            - { Name: source, Type: string }
+            - { Name: time, Type: string }
+            # Unión de los `detail` de eventos.schema.json (Notificacion.Fallida no se almacena).
+            - Name: detail
+              Type: >-
+                struct<incidenciaId:string,estadoAnterior:string,estadoNuevo:string,actor:string,comentario:string,ts:string,snapshot:struct<zonaId:string,clase:string,origen:string,tipo:string,prioridad:double,nivelPrioridad:string,severidadIA:string,incidenteColectivoId:string>,antenaId:string,zonaId:string,gbPorMinuto:double,incidenteColectivoId:string,usuariosDistintos:int,ventanaInicio:string,ventanaFin:string,incidencias:array<string>>
+
+  GrupoTrabajoAthena:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub telecorp-${Stage}
+      Description: Consultas de analítica de Red TeleCorp (1 GB máx. escaneado por consulta)
+      State: ENABLED
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        BytesScannedCutoffPerQuery: 1073741824
+        EngineVersion:
+          SelectedEngineVersion: Athena engine version 3
+        ResultConfiguration:
+          OutputLocation: !Sub s3://${BucketAnalitica}/athena-resultados/
+          EncryptionConfiguration:
+            EncryptionOption: SSE_S3
+
+  # ---------------------------------------------------------------------------
+  # Vistas: se crean al desplegar con una custom resource (ver aws/analitica/README.md)
+  # ---------------------------------------------------------------------------
+  VistasRol:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub telecorp-${Stage}-analitica-vistas-rol
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: crear-vistas
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                Resource: !Sub arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${GrupoTrabajoAthena}
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartitions
+                  - glue:CreateTable
+                  - glue:UpdateTable
+                  - glue:DeleteTable
+                Resource:
+                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog
+                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/${BaseDatos}
+                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:table/${BaseDatos}/*
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !GetAtt BucketAnalitica.Arn
+                  - !Sub ${BucketAnalitica.Arn}/*
+
+  VistasFuncion:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-analitica-vistas
+      Description: Custom resource que crea/actualiza las vistas de Athena
+      CodeUri: ../analitica/
+      Handler: crear_vistas.handler
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      MemorySize: 256
+      Timeout: 900
+      Role: !GetAtt VistasRol.Arn
+
+  Vistas:
+    Type: Custom::VistasAthena
+    DependsOn:
+      - TablaEventos
+    Properties:
+      ServiceToken: !GetAtt VistasFuncion.Arn
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      # Subir este número al cambiar cualquier .sql para que se vuelvan a aplicar.
+      Revision: "1"
+
+  # ---------------------------------------------------------------------------
+  # Lambda de reportes para el panel del operador (la enruta el stack raíz)
+  # ---------------------------------------------------------------------------
+  ApiAnaliticaRol:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub telecorp-${Stage}-api-analitica-rol
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: consultar-athena
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                Resource: !Sub arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${GrupoTrabajoAthena}
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource:
+                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog
+                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/${BaseDatos}
+                  - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:table/${BaseDatos}/*
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:GetObject
+                Resource:
+                  - !GetAtt BucketAnalitica.Arn
+                  - !Sub ${BucketAnalitica.Arn}/*
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub ${BucketAnalitica.Arn}/athena-resultados/*
+
+  ApiAnaliticaFuncion:
+    Type: AWS::Serverless::Function
+    DependsOn: Vistas
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-api-analitica
+      Description: Reportes predefinidos de analítica (Athena) para el panel del operador
+      CodeUri: ../src/api_analitica/
+      Handler: app.lambda_handler
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      MemorySize: 256
+      Timeout: 29
+      Role: !GetAtt ApiAnaliticaRol.Arn
+      Layers:
+        - !Ref ComunLayerArn
+      Environment:
+        Variables:
+          STAGE: !Ref Stage
+          BASE_DATOS: !Ref BaseDatos
+          WORKGROUP: !Ref GrupoTrabajoAthena
+          POWERTOOLS_SERVICE_NAME: api-analitica
+
+  # ---------------------------------------------------------------------------
+  # Consultas guardadas (las mismas vistas, para ejecutar a mano en la consola de Athena)
+  # ---------------------------------------------------------------------------
+  ConsultaEventos:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub telecorp-${Stage}-v-eventos
+      Description: "Definición de la vista v_eventos (CREATE OR REPLACE VIEW)"
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      QueryString: !Sub |
+        CREATE OR REPLACE VIEW ${BaseDatos}.v_eventos AS
+        -- Capa base: eventos deduplicados por id (Firehose/EventBridge entregan al menos una vez).
+        -- La fila es el sobre de EventBridge; detail (struct) pasa a llamarse detalle.
+        SELECT
+          id                                                    AS ce_id,
+          detail_type                                           AS ce_type,
+          source                                                AS ce_source,
+          TRY(CAST(from_iso8601_timestamp("time") AS timestamp)) AS ce_time,
+          detail                                                AS detalle
+        FROM (
+          SELECT
+            e.*,
+            row_number() OVER (PARTITION BY id ORDER BY "time") AS rn
+          FROM ${BaseDatos}.eventos AS e
+          WHERE id IS NOT NULL
+        )
+        WHERE rn = 1
+
+  ConsultaTransiciones:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub telecorp-${Stage}-v-transiciones
+      Description: "Definición de la vista v_transiciones (CREATE OR REPLACE VIEW)"
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      QueryString: !Sub |
+        CREATE OR REPLACE VIEW ${BaseDatos}.v_transiciones AS
+        -- Una fila por cambio de estado de incidencia (Incidencia.CambioEstado).
+        SELECT
+          ce_id,
+          detalle.incidenciaId                                   AS incidenciaId,
+          detalle.estadoAnterior                                 AS estadoAnterior,
+          detalle.estadoNuevo                                    AS estadoNuevo,
+          detalle.actor                                          AS actor,
+          detalle.comentario                                     AS comentario,
+          COALESCE(TRY(CAST(from_iso8601_timestamp(detalle.ts) AS timestamp)), ce_time) AS ts,
+          detalle.snapshot.zonaId                                AS zonaId,
+          detalle.snapshot.clase                                 AS clase,
+          detalle.snapshot.origen                                AS origen,
+          detalle.snapshot.tipo                                  AS tipo,
+          detalle.snapshot.prioridad                             AS prioridad,
+          detalle.snapshot.nivelPrioridad                        AS nivelPrioridad,
+          detalle.snapshot.severidadIA                           AS severidadIA,
+          detalle.snapshot.incidenteColectivoId                  AS incidenteColectivoId
+        FROM ${BaseDatos}.v_eventos
+        WHERE ce_type = 'Incidencia.CambioEstado'
+
+  ConsultaIncidencias:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub telecorp-${Stage}-v-incidencias
+      Description: "Definición de la vista v_incidencias (CREATE OR REPLACE VIEW)"
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      QueryString: !Sub |
+        CREATE OR REPLACE VIEW ${BaseDatos}.v_incidencias AS
+        -- Ultimo estado de cada incidencia, con la duracion hasta SOLUCIONADA.
+        -- duracion_min es NULL mientras la incidencia no se haya solucionado.
+        SELECT
+          incidenciaId,
+          estadoNuevo                                            AS estado_actual,
+          ts                                                     AS actualizada_en,
+          zonaId,
+          clase,
+          origen,
+          tipo,
+          prioridad,
+          nivelPrioridad,
+          severidadIA,
+          incidenteColectivoId,
+          registrada_en,
+          solucionada_en,
+          date_diff('minute', registrada_en, solucionada_en)     AS duracion_min
+        FROM (
+          SELECT
+            t.*,
+            min(ts) OVER (PARTITION BY incidenciaId) AS registrada_en,
+            min(CASE WHEN estadoNuevo = 'SOLUCIONADA' THEN ts END) OVER (PARTITION BY incidenciaId) AS solucionada_en,
+            row_number() OVER (PARTITION BY incidenciaId ORDER BY ts DESC, ce_id DESC) AS rn
+          FROM ${BaseDatos}.v_transiciones AS t
+          WHERE incidenciaId IS NOT NULL
+        )
+        WHERE rn = 1
+
+  ConsultaAntenasEventos:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub telecorp-${Stage}-v-antenas-eventos
+      Description: "Definición de la vista v_antenas_eventos (CREATE OR REPLACE VIEW)"
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      QueryString: !Sub |
+        CREATE OR REPLACE VIEW ${BaseDatos}.v_antenas_eventos AS
+        -- Una fila por cambio de estado de antena (Antena.CambioEstado).
+        -- degradada = TRUE cuando la antena pasa a un estado distinto de NORMAL.
+        SELECT
+          ce_id,
+          detalle.antenaId                                       AS antenaId,
+          detalle.zonaId                                         AS zonaId,
+          detalle.estadoAnterior                                 AS estadoAnterior,
+          detalle.estadoNuevo                                    AS estadoNuevo,
+          detalle.gbPorMinuto                                    AS gbPorMinuto,
+          COALESCE(TRY(CAST(from_iso8601_timestamp(detalle.ts) AS timestamp)), ce_time) AS ts,
+          detalle.estadoNuevo <> 'NORMAL'                        AS degradada
+        FROM ${BaseDatos}.v_eventos
+        WHERE ce_type = 'Antena.CambioEstado'
+
+  ConsultaColectivos:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub telecorp-${Stage}-v-colectivos
+      Description: "Definición de la vista v_colectivos (CREATE OR REPLACE VIEW)"
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      QueryString: !Sub |
+        CREATE OR REPLACE VIEW ${BaseDatos}.v_colectivos AS
+        -- Incidentes colectivos (Zona.UmbralSuperado): linea de tiempo por zona.
+        SELECT
+          ce_id,
+          detalle.incidenteColectivoId                           AS incidenteColectivoId,
+          detalle.zonaId                                         AS zonaId,
+          detalle.usuariosDistintos                              AS usuariosDistintos,
+          TRY(CAST(from_iso8601_timestamp(detalle.ventanaInicio) AS timestamp)) AS ventanaInicio,
+          TRY(CAST(from_iso8601_timestamp(detalle.ventanaFin) AS timestamp))    AS ventanaFin,
+          cardinality(detalle.incidencias)                       AS totalIncidencias,
+          COALESCE(TRY(CAST(from_iso8601_timestamp(detalle.ventanaFin) AS timestamp)), ce_time) AS detectado_en
+        FROM ${BaseDatos}.v_eventos
+        WHERE ce_type = 'Zona.UmbralSuperado'
+
+  ConsultaTopZonas:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub telecorp-${Stage}-v-top-zonas
+      Description: "Definición de la vista v_top_zonas (CREATE OR REPLACE VIEW)"
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      QueryString: !Sub |
+        CREATE OR REPLACE VIEW ${BaseDatos}.v_top_zonas AS
+        -- Incidentes por zona (abiertas o no) y colectivos detectados.
+        SELECT
+          i.zonaId,
+          count(*)                                                        AS incidencias,
+          count_if(i.estado_actual NOT IN ('SOLUCIONADA', 'CERRADA'))     AS abiertas,
+          count_if(i.nivelPrioridad IN ('P1', 'P2'))                      AS prioridad_alta,
+          COALESCE(max(c.colectivos), 0)                                  AS colectivos
+        FROM ${BaseDatos}.v_incidencias AS i
+        LEFT JOIN (
+          SELECT zonaId, count(DISTINCT incidenteColectivoId) AS colectivos
+          FROM ${BaseDatos}.v_colectivos
+          GROUP BY zonaId
+        ) AS c ON c.zonaId = i.zonaId
+        GROUP BY i.zonaId
+
+  ConsultaTopAntenas:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub telecorp-${Stage}-v-top-antenas
+      Description: "Definición de la vista v_top_antenas (CREATE OR REPLACE VIEW)"
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      QueryString: !Sub |
+        CREATE OR REPLACE VIEW ${BaseDatos}.v_top_antenas AS
+        -- Antenas con mas degradaciones (cambios a un estado distinto de NORMAL).
+        -- Ordenar por degradaciones DESC en la consulta (una vista no garantiza orden).
+        SELECT
+          antenaId,
+          arbitrary(zonaId)                                      AS zonaId,
+          count(*)                                               AS degradaciones,
+          count_if(estadoNuevo = 'CAIDA')                        AS caidas,
+          count_if(estadoNuevo = 'SATURADA')                     AS saturaciones,
+          count_if(estadoNuevo = 'INHABILITADA')                 AS inhabilitaciones,
+          max(ts)                                                AS ultima_degradacion
+        FROM ${BaseDatos}.v_antenas_eventos
+        WHERE degradada
+        GROUP BY antenaId
+
+  ConsultaTiposProblema:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub telecorp-${Stage}-v-tipos-problema
+      Description: "Definición de la vista v_tipos_problema (CREATE OR REPLACE VIEW)"
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      QueryString: !Sub |
+        CREATE OR REPLACE VIEW ${BaseDatos}.v_tipos_problema AS
+        -- Incidencias nuevas (registro inicial) por tipo de problema y dia.
+        SELECT
+          CAST(ts AS date)                  AS dia,
+          COALESCE(tipo, 'SIN_TIPO')        AS tipo,
+          clase,
+          origen,
+          count(DISTINCT incidenciaId)      AS incidencias
+        FROM ${BaseDatos}.v_transiciones
+        WHERE estadoNuevo = 'REGISTRADA'
+        GROUP BY 1, 2, 3, 4
+
+  ConsultaRecurrencia:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub telecorp-${Stage}-v-recurrencia
+      Description: "Definición de la vista v_recurrencia (CREATE OR REPLACE VIEW)"
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      QueryString: !Sub |
+        CREATE OR REPLACE VIEW ${BaseDatos}.v_recurrencia AS
+        -- Recurrencia: zonas con varios incidentes colectivos e incidencias creadas
+        -- por la deteccion de recurrencia (origen = 'RECURRENCIA').
+        SELECT
+          z.zonaId,
+          z.colectivos,
+          z.primer_colectivo,
+          z.ultimo_colectivo,
+          COALESCE(r.incidencias_recurrencia, 0) AS incidencias_recurrencia,
+          z.colectivos > 1                       AS es_recurrente
+        FROM (
+          SELECT
+            zonaId,
+            count(DISTINCT incidenteColectivoId) AS colectivos,
+            min(detectado_en)                    AS primer_colectivo,
+            max(detectado_en)                    AS ultimo_colectivo
+          FROM ${BaseDatos}.v_colectivos
+          GROUP BY zonaId
+        ) AS z
+        LEFT JOIN (
+          SELECT zonaId, count(*) AS incidencias_recurrencia
+          FROM ${BaseDatos}.v_incidencias
+          WHERE origen = 'RECURRENCIA'
+          GROUP BY zonaId
+        ) AS r ON r.zonaId = z.zonaId
+
+  ConsultaMttr:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub telecorp-${Stage}-v-mttr
+      Description: "Definición de la vista v_mttr (CREATE OR REPLACE VIEW)"
+      Database: !Ref BaseDatos
+      WorkGroup: !Ref GrupoTrabajoAthena
+      QueryString: !Sub |
+        CREATE OR REPLACE VIEW ${BaseDatos}.v_mttr AS
+        -- Tiempo medio de resolucion (MTTR) por zona y nivel de prioridad.
+        -- Solo incidencias que ya llegaron a SOLUCIONADA.
+        SELECT
+          zonaId,
+          COALESCE(nivelPrioridad, 'SIN_PRIORIDAD')  AS nivelPrioridad,
+          count(*)                                   AS resueltas,
+          round(avg(duracion_min), 1)                AS mttr_min,
+          approx_percentile(duracion_min, 0.5)       AS mediana_min,
+          max(duracion_min)                          AS maximo_min
+        FROM ${BaseDatos}.v_incidencias
+        WHERE duracion_min IS NOT NULL
+        GROUP BY 1, 2
+
+Outputs:
+  ApiAnaliticaArn:
+    Description: ARN de la Lambda de reportes; el stack raíz la enruta en GET /analitica/{reporte}
+    Value: !GetAtt ApiAnaliticaFuncion.Arn
+  ApiAnaliticaNombre:
+    Value: !Ref ApiAnaliticaFuncion
+  BucketAnaliticaNombre:
+    Value: !Ref BucketAnalitica
+  BaseDatosNombre:
+    Value: !Ref BaseDatos
+  GrupoTrabajoAthenaNombre:
+    Value: !Ref GrupoTrabajoAthena
+  FirehoseEventosArn:
+    Value: !GetAtt FirehoseEventos.Arn
