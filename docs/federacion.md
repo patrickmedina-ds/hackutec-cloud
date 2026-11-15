@@ -1,12 +1,14 @@
 # Federación entre nubes y puente multinube (bloque B)
 
-El puente replica cada evento `telecorp.*` del bus `telecorp-<stage>-eventos` a **Azure Event Grid** como CloudEvents 1.0 (contratos/integraciones.md §3). No se guardan llaves ni secretos: Azure confía en la identidad del rol IAM de la Lambda (credencial federada de Entra ID).
+El puente replica cada evento `telecorp.*` del bus `telecorp-<stage>-eventos` a **Azure Event Grid** como CloudEvents 1.0 (contratos/integraciones.md §3). No se guardan llaves ni secretos: Azure confía en un JWT de **Cognito Identity** (identidad de desarrollador fija) mediante una credencial federada de Entra ID. El mismo mecanismo autentica a `clasificar-ia` frente a **Azure OpenAI**. Como la cuenta es un **AWS Academy Learner Lab**, las Lambdas usan `LabRole` (no se crean roles IAM) y la federación saliente de IAM (`sts:GetWebIdentityToken`) no está disponible.
 
 | Pieza | Archivo |
 |---|---|
-| Stack SAM anidado (Lambda, regla, DLQ, alarmas, rol) | `aws/stacks/puente.yaml` |
+| Stack SAM anidado (Lambda, regla, DLQ, alarmas, Identity Pool, parámetro SSM) | `aws/stacks/puente.yaml` |
 | Código de la Lambda | `aws/src/puente_multinube/` |
+| JWT de Cognito + canje en Entra + caché (compartido con la IA) | `aws/layers/comun/python/telecorp_comun/entra.py` |
 | App Registration, credencial federada, rol en Event Grid | `azure/terraform/federacion.tf` |
+| Azure OpenAI (cuenta, despliegue `gpt-4.1-mini`, rol) | `azure/terraform/openai.tf` |
 | Respaldo de eventos en Blob Storage (cuenta GRS, versionado, ciclo de vida) | `azure/terraform/respaldo.tf`, `azure/functions/telecorp_azure/respaldo.py` |
 | Pruebas | `aws/tests/puente/`, `azure/tests/` |
 
@@ -33,55 +35,47 @@ Lambda telecorp-<stage>-puente-multinube  (invocación asíncrona)
 ## 2. Flujo de tokens
 
 ```
- Lambda (rol telecorp-<stage>-puente-multinube-rol)
- (1) sts:GetWebIdentityToken (STS regional us-east-1)
-     Audience=api://AzureADTokenExchange, RS256, 300 s
-        │
+ Lambda (LabRole)  puente-multinube  /  clasificar-ia
+ (1) cognito-identity:GetOpenIdTokenForDeveloperIdentity
+     IdentityPoolId=<pool>, Logins={"telecorp.aws": "telecorp-<stage>"}, TokenDuration=300
+        │   (mismo login fijo ⇒ mismo IdentityId para ambas Lambdas)
         ▼
-     JWT  iss=https://<id>.tokens.sts.global.api.aws
-          sub=arn:aws:iam::<cuenta>:role/telecorp-<stage>-puente-multinube-rol
-          aud=api://AzureADTokenExchange
+     JWT  iss=https://cognito-identity.amazonaws.com
+          sub=<IdentityId>  (us-east-1:<uuid>)
+          aud=<IdentityPoolId>
         │
  (2) POST login.microsoftonline.com/<tenant>/oauth2/v2.0/token
      grant_type=client_credentials, client_id=<app>
      client_assertion_type=…jwt-bearer, client_assertion=JWT
-     scope=https://eventgrid.azure.net/.default
+     scope=https://eventgrid.azure.net/.default            (puente)
+           https://cognitiveservices.azure.com/.default    (IA)
      Entra valida iss/sub/aud contra la credencial federada
-     y la firma con el JWKS público del emisor AWS
+     y la firma con el JWKS público de Cognito
         │
- (3) access_token Entra (~1 h) → Bearer → Event Grid
-     (rol EventGrid Data Sender sobre el tema)
+ (3) access_token Entra (~1 h) → Bearer
+     → Event Grid      (rol EventGrid Data Sender sobre el tema)
+     → Azure OpenAI    (rol Cognitive Services OpenAI User sobre la cuenta)
 ```
 
-**Caché entre invocaciones** (variables de módulo, viven lo que el contenedor):
-- Parámetros SSM: una sola llamada `GetParameters` para los tres, TTL 5 min (`CONFIG_TTL_SEGUNDOS`).
-- Azure: el token de Entra se reutiliza hasta 5 min antes de `expires_in`; el JWT de AWS se pide solo al renovar.
-- Un 401/403 de Event Grid descarta el token para que el siguiente intento lo renueve.
-- Una sola `requests.Session` (conexiones keep-alive) para el destino.
+Lógica compartida en `telecorp_comun.entra` (`jwt_cognito`, `ProveedorTokenEntra`):
+- El token de Entra se reutiliza hasta 5 min antes de `expires_in`; el JWT de Cognito se pide solo al renovar.
+- Un 401/403 del recurso descarta el token para que el siguiente intento lo renueve.
+- Puente: parámetros SSM `tenant-id`, `client-id`, `eventgrid-endpoint` en una sola `GetParameters` (TTL 5 min); el IdentityPoolId llega por la variable de entorno `COGNITO_IDENTITY_POOL_ID` (`!Ref IdentityPool`).
+- IA: `tenant-id`, `client-id`, `openai-endpoint`, `openai-deployment` y `/telecorp/<stage>/aws/identity-pool-id` en una sola `GetParameters` (TTL 5 min).
 
-## 3. Decisión: cómo obtiene la Lambda un JWT OIDC para Entra ID
+## 3. Decisión: Cognito Identity Pool (identidades de desarrollador)
 
-Entra ID solo acepta, como credencial federada, un JWT de un emisor OIDC público con un `sub` estable. AWS no da a una Lambda un JWT por defecto, así que se evaluaron dos opciones:
+Entra ID solo acepta, como credencial federada, un JWT de un emisor OIDC público con un `sub` estable. En Learner Lab no se pueden crear roles IAM y la federación saliente de IAM (`sts:GetWebIdentityToken`) está deshabilitada, así que el único camino sin secretos es **Cognito Identity**:
 
-| | **A. Federación saliente de IAM** (`sts:GetWebIdentityToken`) — **elegida** | B. Cognito Identity Pool (`GetOpenIdTokenForDeveloperIdentity`) — plan B |
-|---|---|---|
-| Disponibilidad | GA desde 19‑nov‑2025; se activa una vez por cuenta (`aws iam enable-outbound-web-identity-federation`) | Disponible desde hace años |
-| Recursos extra | Ninguno | Identity Pool + proveedor de desarrollador + permiso `cognito-identity:GetOpenIdTokenForDeveloperIdentity` |
-| Emisor (`iss`) | `https://<id>.tokens.sts.global.api.aws` (propio de la cuenta) | `https://cognito-identity.amazonaws.com` (compartido por todo AWS) |
-| `sub` | ARN del rol IAM (`arn:aws:iam::<cuenta>:role/<rol>`): estable y legible | IdentityId (`us-east-1:<uuid>`): hay que crearlo antes y copiarlo a Terraform |
-| `aud` | Elegida por el que llama; IAM la restringe (`sts:IdentityTokenAudience`) | Siempre el IdentityPoolId |
-| Control en IAM | Condiciones `sts:IdentityTokenAudience`, `sts:SigningAlgorithm`, `sts:DurationSeconds` | Solo quién puede llamar a la API |
-| Claims extra | Cuenta, organización, tags del principal, ARN de la función Lambda de origen | Ninguno útil |
+| | Cognito Identity Pool |
+|---|---|
+| Recurso | `AWS::Cognito::IdentityPool` `telecorp_<stage>_federacion_azure`, `DeveloperProviderName: telecorp.aws`, `AllowUnauthenticatedIdentities: false`, `AllowClassicFlow: false` |
+| Emisor (`iss`) | `https://cognito-identity.amazonaws.com` |
+| Audiencia (`aud`) | IdentityPoolId (también en SSM `/telecorp/<stage>/aws/identity-pool-id` y salida `IdentityPoolId` del stack) |
+| Sujeto (`sub`) | IdentityId de la identidad `{"telecorp.aws": "telecorp-<stage>"}` |
+| Quién puede pedir el JWT | Cualquier principal con `cognito-identity:GetOpenIdTokenForDeveloperIdentity` sobre el pool (en el lab, `LabRole`) |
 
-**Se elige A** porque el `sub` *es* el rol de nombre fijo que ya acordamos (`telecorp-<stage>-puente-multinube-rol`), la confianza en Entra es por emisor propio de la cuenta (no por un emisor global compartido), no requiere recursos ni pasos manuales adicionales, y la política del rol limita la audiencia a `api://AzureADTokenExchange`, el algoritmo a RS256 y la vida a 5 min. Se usa RS256 (no ES384) porque es el algoritmo que Entra valida con certeza.
-
-Requisitos de A: `boto3 >= 1.42` (se empaqueta en `requirements.txt` por si el del runtime es anterior) y endpoint **regional** de STS (la API no existe en el endpoint global; el código usa `https://sts.<región>.amazonaws.com`).
-
-**Plan B (Cognito)**, por si la federación saliente no puede activarse en la cuenta:
-1. Crear un Identity Pool con un *developer provider* (p. ej. `telecorp.puente`) y dar al rol `cognito-identity:GetOpenIdTokenForDeveloperIdentity` sobre el pool.
-2. Invocar una vez `GetOpenIdTokenForDeveloperIdentity` con `Logins={"telecorp.puente": "telecorp-<stage>-puente-multinube"}` y anotar el `IdentityId`.
-3. En `azure/terraform`: `aws_oidc_issuer_url = "https://cognito-identity.amazonaws.com"`, `aws_oidc_subject = <IdentityId>`, `aws_oidc_audience = <IdentityPoolId>`.
-4. En la Lambda: `AZURE_ORIGEN_JWT=cognito`, `COGNITO_IDENTITY_POOL_ID`, `COGNITO_PROVEEDOR_DESARROLLADOR` (ya implementado en `destino_azure.jwt_cognito`).
+Consecuencias: el emisor es compartido por todo AWS, pero la confianza queda acotada por `aud` (nuestro pool) y `sub` (nuestra identidad). El IdentityId se crea con la primera llamada y debe pasarse a Terraform (§5). Si se borra y recrea el pool, cambian pool e IdentityId y hay que volver a aplicar Terraform.
 
 ## 4. Respaldo de eventos en Blob Storage (otra nube)
 
@@ -96,33 +90,34 @@ La función `replicar` de Azure guarda además cada CloudEvent **crudo** (tal co
 
 ## 5. Configuración paso a paso
 
-Requisitos: el stack raíz desplegado (bus y capa) y, en Azure, el recurso del bloque E (`azurerm_eventgrid_topic.eventos` con esquema de entrada `CloudEventSchemaV1_0`).
+Requisitos: el stack raíz desplegado (bus, capa y `RolLabArn` = ARN de `LabRole`) y, en Azure, el resto del Terraform (`azurerm_eventgrid_topic.eventos`).
 
 ```bash
 STAGE=dev
-CUENTA=$(aws sts get-caller-identity --query Account --output text)
 
-# 1. AWS: activar la federación saliente (una vez por cuenta) y anotar el emisor
-aws iam enable-outbound-web-identity-federation || true
-EMISOR=$(aws iam get-outbound-web-identity-federation-info --query IssuerUrl --output text)
-
-# 2. AWS: desplegar (el stack puente crea el rol de nombre fijo)
+# 1. AWS: desplegar (el stack puente crea el Identity Pool y el parámetro SSM)
 cd aws && sam build && sam deploy --config-env $STAGE && cd ..
+POOL=$(aws ssm get-parameter --name /telecorp/$STAGE/aws/identity-pool-id --query Parameter.Value --output text)
+
+# 2. AWS: crear/obtener el IdentityId de la identidad fija (idempotente: mismo login ⇒ mismo id)
+IDENTIDAD=$(aws cognito-identity get-open-id-token-for-developer-identity \
+  --identity-pool-id "$POOL" --logins telecorp.aws=telecorp-$STAGE \
+  --query IdentityId --output text)
 
 # 3. Azure
 cd azure/terraform
-terraform apply -var stage=$STAGE -var aws_account_id=$CUENTA -var aws_oidc_issuer_url=$EMISOR
-for clave in tenant-id client-id eventgrid-endpoint; do
-  salida=federacion_$(echo $clave | tr - _)
-  aws ssm put-parameter --overwrite --type String \
-    --name /telecorp/$STAGE/azure/$clave --value "$(terraform output -raw $salida)"
+terraform apply -var stage=$STAGE \
+  -var aws_cognito_identity_pool_id=$POOL -var aws_cognito_identity_id=$IDENTIDAD
+for clave in tenant-id client-id eventgrid-endpoint openai-endpoint openai-deployment; do
+  aws ssm put-parameter --overwrite --type String --name /telecorp/$STAGE/azure/$clave \
+    --value "$(terraform output -json federacion_ssm | jq -r --arg k /telecorp/$STAGE/azure/$clave '.[$k]')"
 done
 cd ../..
 ```
 
-El orden 2 → 3 no es obligatorio: Entra no verifica que el rol exista al crear la confianza. La Lambda relee SSM cada 5 min, así que no hace falta redesplegarla tras cargar los parámetros.
+Las Lambdas releen SSM cada 5 min: no hace falta redesplegarlas tras cargar los parámetros. La asignación de roles en Azure tarda hasta ~5 min en propagarse.
 
-Variables de entorno de la Lambda (en `puente.yaml`): `DESTINOS` (`azure`), `AZURE_ORIGEN_JWT` (`iam` | `cognito`).
+Variables de entorno: puente `DESTINOS` (`azure`), `COGNITO_IDENTITY_POOL_ID`, `COGNITO_PROVEEDOR_DESARROLLADOR`; IA `COGNITO_PROVEEDOR_DESARROLLADOR` (el resto por SSM).
 
 ## 6. Cómo probarlo
 
@@ -131,14 +126,13 @@ Variables de entorno de la Lambda (en `puente.yaml`): `DESTINOS` (`azure`), `AZU
 pip install -r aws/src/puente_multinube/requirements.txt pytest moto jsonschema
 pytest aws/tests/puente azure/tests -q
 ```
-Cubre la conversión a CloudEvents (incluida la validación del `data` contra `contratos/eventos.schema.json`), el fallo del destino (Event Grid sin red, Entra rechaza la federación, falta configuración), el error final del handler, el caché de token de Entra y de SSM, la llamada a `GetWebIdentityToken` (Stubber de botocore) y, en `azure/tests`, el respaldo en Blob con un cliente simulado (ruta, contenido crudo, idempotencia, errores).
+Cubre la conversión a CloudEvents (incluida la validación del `data` contra `contratos/eventos.schema.json`), el fallo del destino (Event Grid sin red, Entra rechaza la federación, falta configuración), el error final del handler, el caché de token de Entra y de SSM, la llamada a `GetOpenIdTokenForDeveloperIdentity` (Stubber de botocore) y, en `azure/tests`, el respaldo en Blob con un cliente simulado (ruta, contenido crudo, idempotencia, errores).
 
 **En la nube, por partes:**
 ```bash
-# JWT de AWS (con credenciales de un principal que tenga sts:GetWebIdentityToken)
-aws sts get-web-identity-token --region us-east-1 --endpoint-url https://sts.us-east-1.amazonaws.com \
-  --audience api://AzureADTokenExchange --signing-algorithm RS256 --duration-seconds 300 \
-  --query WebIdentityToken --output text | cut -d. -f2 | base64 -d 2>/dev/null; echo   # ver iss/sub/aud
+# JWT de Cognito (ver iss/sub/aud)
+aws cognito-identity get-open-id-token-for-developer-identity --identity-pool-id "$POOL" \
+  --logins telecorp.aws=telecorp-dev --query Token --output text | cut -d. -f2 | base64 -d 2>/dev/null; echo
 
 # Evento de prueba de punta a punta
 aws events put-events --entries '[{"EventBusName":"telecorp-dev-eventos","Source":"telecorp.zonas",
@@ -154,8 +148,9 @@ aws sqs get-queue-attributes --queue-url <PuenteDLQUrl> --attribute-names Approx
 | Síntoma (logs del puente) | Causa |
 |---|---|
 | `AADSTS70021: No matching federated identity record` | `issuer`, `subject` o `audience` de la credencial federada no coinciden con el JWT (comparar con el JWT decodificado; el `iss` sin `/` final) |
-| `AccessDenied ... sts:GetWebIdentityToken` | Federación saliente sin activar o la petición no cumple las condiciones de la política (audiencia, RS256, ≤ 300 s) |
-| `OutboundWebIdentityFederationDisabledException` | Falta `aws iam enable-outbound-web-identity-federation` |
+| `AADSTS700211`/`AADSTS70021` tras recrear el stack | El Identity Pool cambió: repetir §5 pasos 2–3 con el nuevo pool e IdentityId |
+| `ResourceNotFoundException` de Cognito | `COGNITO_IDENTITY_POOL_ID` o el parámetro SSM `/aws/identity-pool-id` apuntan a un pool inexistente |
+| `clasificar-ia` responde siempre `fuente: "reglas"` | Ver logs ("Respaldo por reglas"): falta SSM `openai-*`, rol `Cognitive Services OpenAI User` sin propagar, o 429 por cuota |
 | Event Grid `401` | Rol `EventGrid Data Sender` aún propagándose (hasta ~5 min) o token de otro tenant |
 
 **Redirigir la DLQ** cuando se corrija la causa: los mensajes de Lambda traen el evento original en `requestPayload`; los de EventBridge, el evento tal cual. Basta reenviarlos con `aws lambda invoke --invocation-type Event` a la función.

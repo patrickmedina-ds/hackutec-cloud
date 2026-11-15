@@ -50,7 +50,7 @@ La regla del puente envía cada evento del bus a la Lambda, y esta lo convierte 
 
 - Se publica en el tema de Event Grid `telecorp-<stage>-eventos` (esquema de entrada **CloudEvents 1.0**, `application/cloudevents-batch+json`).
 - Si falla, la Lambda lanza error: Lambda reintenta y, al agotar, el evento va a la DLQ `telecorp-<stage>-puente-dlq`.
-- Autenticación sin llaves: federación saliente de IAM (`sts:GetWebIdentityToken`) → credencial federada de una App Registration de Entra ID. Parámetros SSM `/telecorp/<stage>/azure/tenant-id`, `/client-id`, `/eventgrid-endpoint`. Detalle en `docs/federacion.md`.
+- Autenticación sin llaves: JWT de **Cognito Identity** (`GetOpenIdTokenForDeveloperIdentity`, identidad de desarrollador fija `{"telecorp.aws": "telecorp-<stage>"}` del Identity Pool del stack puente) → credencial federada de una App Registration de Entra ID (iss `https://cognito-identity.amazonaws.com`, aud = IdentityPoolId, sub = IdentityId) → token con scope `https://eventgrid.azure.net/.default`. Lógica compartida en `telecorp_comun.entra`. La Lambda usa `LabRole`. Parámetros SSM `/telecorp/<stage>/azure/tenant-id`, `/client-id`, `/eventgrid-endpoint` y `/telecorp/<stage>/aws/identity-pool-id`. Detalle en `docs/federacion.md`.
 - Entrega al menos una vez: los consumidores deduplican por el `id` del CloudEvent.
 
 ### Cosmos DB y Blob Storage (Azure)
@@ -78,8 +78,9 @@ Salida:
 { "resumen": "...", "severidad": "CRITICA", "causaProbable": "..." }
 { "asunto": "...", "mensaje": "..." }
 ```
-- Modelo: **Amazon Bedrock** (API `Converse`), perfil de inferencia configurable con el parámetro `ModeloIa` (por defecto `us.anthropic.claude-haiku-4-5-20251001-v1:0`). Salida JSON forzada con tool use (`toolChoice`).
-- Autenticación: el rol IAM de la Lambda (`bedrock:InvokeModel`). Hay que habilitar el acceso al modelo en la consola de Bedrock.
-- Todas las respuestas incluyen `fuente`: `"bedrock"` o `"reglas"`.
-- **Respaldo obligatorio:** si Bedrock falla o tarda más de 8 s, la Lambda responde con reglas locales (palabras clave → tipo y severidad; plantillas fijas para avisos). Nunca debe romper la SFN.
+- Modelo: **Azure OpenAI** `gpt-4.1-mini` (versión `2025-04-14`, despliegue GlobalStandard en `westus`), API Chat Completions REST `POST <endpoint>/openai/deployments/<despliegue>/chat/completions?api-version=2024-10-21`. Salida JSON forzada con `response_format` `json_schema` y `strict: true` (los esquemas de `prompts.ESQUEMAS`, con `additionalProperties: false`).
+- Autenticación sin llaves (la cuenta tiene `local_auth_enabled = false`): mismo flujo que el puente (Cognito Identity → Entra ID) con scope `https://cognitiveservices.azure.com/.default`; el service principal tiene el rol `Cognitive Services OpenAI User`. La Lambda usa `LabRole`.
+- Configuración por SSM: `/telecorp/<stage>/azure/tenant-id`, `/client-id`, `/openai-endpoint`, `/openai-deployment` y `/telecorp/<stage>/aws/identity-pool-id` (caché 5 min).
+- Todas las respuestas incluyen `fuente`: `"azure-openai"` o `"reglas"`.
+- **Respaldo obligatorio:** si Azure OpenAI (o Entra/Cognito/SSM) falla, devuelve algo inválido o tarda más de 8 s en total, la Lambda responde con reglas locales (palabras clave → tipo y severidad; plantillas fijas para avisos). Nunca debe romper la SFN.
 - SMS: máximo 160 caracteres.

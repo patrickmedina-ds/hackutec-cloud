@@ -7,13 +7,8 @@ import pytest
 from apoyo_puente import ConfigFalsa, Respuesta
 from botocore.stub import Stubber
 from configuracion import Configuracion, ConfiguracionFaltante, nombre_parametro
-from destino_azure import (
-    AUDIENCIA_ENTRA,
-    MARGEN_RENOVACION,
-    PublicadorEventGrid,
-    ProveedorTokenEntra,
-    jwt_iam_saliente,
-)
+from destino_azure import PublicadorEventGrid, proveedor_token
+from telecorp_comun.entra import MARGEN_RENOVACION, jwt_cognito
 from moto import mock_aws
 
 CE = {"specversion": "1.0", "id": "x", "source": "telecorp/aws/telecorp.zonas", "type": "Zona.UmbralSuperado",
@@ -32,7 +27,7 @@ class Reloj:
 def test_token_entra_se_reutiliza_hasta_cerca_de_expirar(http):
     reloj = Reloj()
     emitidos = []
-    tokens = ProveedorTokenEntra(ConfigFalsa(), http, origen_jwt=lambda: emitidos.append(1) or "jwt", reloj=reloj)
+    tokens = proveedor_token(ConfigFalsa(), http, origen_jwt=lambda: emitidos.append(1) or "jwt", reloj=reloj)
 
     assert tokens.token() == "token-entra"
     reloj.t += 3599 - MARGEN_RENOVACION - 1
@@ -45,7 +40,7 @@ def test_token_entra_se_reutiliza_hasta_cerca_de_expirar(http):
 
 
 def test_varias_publicaciones_usan_un_solo_token(http):
-    tokens = ProveedorTokenEntra(ConfigFalsa(), http, origen_jwt=lambda: "jwt")
+    tokens = proveedor_token(ConfigFalsa(), http, origen_jwt=lambda: "jwt")
     eg = PublicadorEventGrid(ConfigFalsa(), http, tokens)
     for _ in range(5):
         eg.publicar(CE)
@@ -54,7 +49,7 @@ def test_varias_publicaciones_usan_un_solo_token(http):
 
 
 def test_401_de_event_grid_descarta_el_token(http):
-    tokens = ProveedorTokenEntra(ConfigFalsa(), http, origen_jwt=lambda: "jwt")
+    tokens = proveedor_token(ConfigFalsa(), http, origen_jwt=lambda: "jwt")
     eg = PublicadorEventGrid(ConfigFalsa(), http, tokens)
     http.responder("eventgrid.azure.net", Respuesta(401, texto="Unauthorized"))
     with pytest.raises(RuntimeError):
@@ -64,15 +59,26 @@ def test_401_de_event_grid_descarta_el_token(http):
     assert len(http.a("login.microsoftonline.com")) == 2
 
 
-def test_jwt_iam_saliente_pide_rs256_y_audiencia_de_entra():
-    sts = boto3.client("sts", region_name="us-east-1")
-    with Stubber(sts) as stub:
+def test_jwt_cognito_usa_identidad_de_desarrollador_fija():
+    cognito = boto3.client("cognito-identity", region_name="us-east-1",
+                           aws_access_key_id="x", aws_secret_access_key="x")
+    with Stubber(cognito) as stub:
         stub.add_response(
-            "get_web_identity_token",
-            {"WebIdentityToken": "eyJ.jwt.firma", "Expiration": "2026-11-15T15:00:00Z"},
-            {"Audience": [AUDIENCIA_ENTRA], "SigningAlgorithm": "RS256", "DurationSeconds": 300},
+            "get_open_id_token_for_developer_identity",
+            {"IdentityId": "us-east-1:abc", "Token": "eyJ.jwt.cognito"},
+            {"IdentityPoolId": "us-east-1:pool", "Logins": {"telecorp.aws": "telecorp-test"},
+             "TokenDuration": 300},
         )
-        assert jwt_iam_saliente(sts) == "eyJ.jwt.firma"
+        assert jwt_cognito("us-east-1:pool", cognito) == "eyJ.jwt.cognito"
+
+
+def test_jwt_aws_lee_el_pool_de_la_variable_de_entorno(monkeypatch):
+    import destino_azure
+
+    vistos = []
+    monkeypatch.setenv("COGNITO_IDENTITY_POOL_ID", "us-east-1:pool")
+    monkeypatch.setattr(destino_azure, "jwt_cognito", lambda pool: vistos.append(pool) or "jwt")
+    assert destino_azure.jwt_aws() == "jwt" and vistos == ["us-east-1:pool"]
 
 
 # --- SSM ------------------------------------------------------------------------------------------

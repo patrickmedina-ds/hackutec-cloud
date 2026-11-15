@@ -1,65 +1,53 @@
 # =============================================================================
 # Bloque B · Federación AWS → Azure (credencial de identidad federada en Entra ID)
 #
-# La Lambda `telecorp-<stage>-puente-multinube` obtiene un JWT de la federación
-# saliente de IAM (sts:GetWebIdentityToken) y lo canjea en Entra ID por un token
-# para Event Grid. No hay secretos de cliente. Ver docs/federacion.md.
+# Las Lambdas `puente-multinube` y `clasificar-ia` (con LabRole) obtienen un JWT
+# de Cognito Identity (GetOpenIdTokenForDeveloperIdentity, identidad de desarrollador
+# fija) y lo canjean en Entra ID por un token para Event Grid o Azure OpenAI.
+# Learner Lab no permite la federación saliente de IAM. Sin secretos de cliente.
+# Ver docs/federacion.md.
 #
 # Usa lo que define el bloque E: var.stage, var.location, providers azurerm y
 # azuread (>= 3.0), azurerm_resource_group.main y azurerm_eventgrid_topic.eventos.
 # =============================================================================
 
-variable "aws_account_id" {
-  description = "Cuenta AWS (12 dígitos) donde vive la Lambda puente-multinube."
-  type        = string
-
-  validation {
-    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
-    error_message = "aws_account_id debe tener 12 dígitos."
-  }
-}
-
-variable "aws_oidc_issuer_url" {
+variable "aws_cognito_identity_pool_id" {
   description = <<-EOT
-    Emisor OIDC de la cuenta AWS para la federación saliente de IAM, exactamente como
-    aparece en el claim `iss` (p. ej. https://<id>.tokens.sts.global.api.aws).
-    Se obtiene con `aws iam get-outbound-web-identity-federation-info`.
-    Plan B (Cognito): https://cognito-identity.amazonaws.com
+    IdentityPoolId de Cognito (salida IdentityPoolId del stack puente o SSM
+    /telecorp/<stage>/aws/identity-pool-id). Es la audiencia (aud) del JWT.
   EOT
   type        = string
 
   validation {
-    condition     = startswith(var.aws_oidc_issuer_url, "https://") && !endswith(var.aws_oidc_issuer_url, "/")
-    error_message = "El emisor debe empezar con https:// y no terminar en '/' (Entra compara el iss literalmente)."
+    condition     = can(regex("^[a-z]{2}-[a-z]+-[0-9]:[0-9a-f-]{36}$", var.aws_cognito_identity_pool_id))
+    error_message = "Formato esperado: <región>:<uuid> (p. ej. us-east-1:1234abcd-...)."
   }
 }
 
-variable "aws_oidc_subject" {
+variable "aws_cognito_identity_id" {
   description = <<-EOT
-    Sujeto esperado en el JWT. Vacío = ARN del rol del puente (federación saliente de IAM).
-    Plan B (Cognito): el IdentityId de la identidad de desarrollador (us-east-1:<uuid>).
+    IdentityId de la identidad de desarrollador fija {"telecorp.aws": "telecorp-<stage>"}.
+    Es el sujeto (sub) del JWT. Se obtiene con
+    aws cognito-identity get-open-id-token-for-developer-identity (ver docs/federacion.md).
   EOT
   type        = string
-  default     = ""
-}
 
-variable "aws_oidc_audience" {
-  description = "Audiencia del JWT. Federación saliente: api://AzureADTokenExchange. Plan B: el IdentityPoolId de Cognito."
-  type        = string
-  default     = "api://AzureADTokenExchange"
+  validation {
+    condition     = can(regex("^[a-z]{2}-[a-z]+-[0-9]:[0-9a-f-]{36}$", var.aws_cognito_identity_id))
+    error_message = "Formato esperado: <región>:<uuid>."
+  }
 }
 
 data "azuread_client_config" "actual" {}
 
 locals {
-  rol_puente_arn = "arn:aws:iam::${var.aws_account_id}:role/telecorp-${var.stage}-puente-multinube-rol"
-  sujeto_aws     = var.aws_oidc_subject != "" ? var.aws_oidc_subject : local.rol_puente_arn
+  emisor_cognito = "https://cognito-identity.amazonaws.com"
 }
 
 # --- App Registration + service principal ---------------------------------------------
 resource "azuread_application" "puente" {
   display_name     = "telecorp-${var.stage}-puente-multinube"
-  description      = "Lambda AWS puente-multinube: publica CloudEvents en Event Grid"
+  description      = "Lambdas AWS (puente-multinube y clasificar-ia): Event Grid y Azure OpenAI"
   sign_in_audience = "AzureADMyOrg"
   owners           = [data.azuread_client_config.actual.object_id]
 }
@@ -69,14 +57,14 @@ resource "azuread_service_principal" "puente" {
   owners    = [data.azuread_client_config.actual.object_id]
 }
 
-# --- Credencial federada: confía en el JWT emitido por AWS para el rol del puente -------
+# --- Credencial federada: confía en el JWT de Cognito Identity de la identidad fija -----
 resource "azuread_application_federated_identity_credential" "aws_puente" {
   application_id = azuread_application.puente.id
-  display_name   = "aws-${var.stage}-puente-multinube"
-  description    = "JWT de AWS (sts:GetWebIdentityToken) del rol ${local.rol_puente_arn}"
-  issuer         = var.aws_oidc_issuer_url
-  subject        = local.sujeto_aws
-  audiences      = [var.aws_oidc_audience]
+  display_name   = "aws-${var.stage}-cognito"
+  description    = "JWT de Cognito Identity (GetOpenIdTokenForDeveloperIdentity) de telecorp-${var.stage}"
+  issuer         = local.emisor_cognito
+  subject        = var.aws_cognito_identity_id
+  audiences      = [var.aws_cognito_identity_pool_id]
 }
 
 # --- Permiso mínimo: solo enviar eventos al tema ---------------------------------------
@@ -110,5 +98,7 @@ output "federacion_ssm" {
     "/telecorp/${var.stage}/azure/tenant-id"          = data.azuread_client_config.actual.tenant_id
     "/telecorp/${var.stage}/azure/client-id"          = azuread_application.puente.client_id
     "/telecorp/${var.stage}/azure/eventgrid-endpoint" = azurerm_eventgrid_topic.eventos.endpoint
+    "/telecorp/${var.stage}/azure/openai-endpoint"    = azurerm_cognitive_account.openai.endpoint
+    "/telecorp/${var.stage}/azure/openai-deployment"  = azurerm_cognitive_deployment.chat.name
   }
 }

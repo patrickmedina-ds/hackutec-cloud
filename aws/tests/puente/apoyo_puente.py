@@ -97,9 +97,9 @@ EVENTOS = {
             "ts": "2026-11-15T14:02:00Z",
         },
     },
-    "Notificacion.Fallida": {
+    "Notificacion.Solicitada": {
         "id": "evt-not-1",
-        "detail-type": "Notificacion.Fallida",
+        "detail-type": "Notificacion.Solicitada",
         "source": "telecorp.notificaciones",
         "time": "2026-11-15T14:05:00Z",
         "detail": {
@@ -109,7 +109,6 @@ EVENTOS = {
             "destino": "+51987654321",
             "asunto": "Red TeleCorp",
             "mensaje": "Identificamos una falla",
-            "error": "SNS.ThrottledException",
         },
     },
 }

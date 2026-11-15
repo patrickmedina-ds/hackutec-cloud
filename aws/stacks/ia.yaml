@@ -1,6 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Red TeleCorp - bloque G. Lambda clasificar-ia (Amazon Bedrock con respaldo por reglas).
+Description: >
+  Red TeleCorp - bloque G. Lambda clasificar-ia (Azure OpenAI gpt-4.1-mini con respaldo
+  por reglas). Autenticación sin llaves: JWT de Cognito Identity canjeado en Entra ID.
+  Learner Lab: usa LabRole, sin recursos IAM.
 
 Parameters:
   Stage:
@@ -9,68 +12,34 @@ Parameters:
   ComunLayerArn:
     Type: String
     Description: ARN de la capa telecorp_comun
-  ModeloIa:
+  RolLabArn:
     Type: String
-    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
-    Description: >-
-      ID del modelo o perfil de inferencia de Bedrock (variable MODELO_IA). Se puede cambiar a un
-      modelo más nuevo disponible en la cuenta (con acceso habilitado en Bedrock); si es un
-      perfil de otra geografía (eu., apac.) ajusta también los permisos IAM.
+    Description: ARN del rol LabRole (Learner Lab no permite crear roles IAM).
 
 Resources:
-  # Rol con nombre fijo. Requiere CAPABILITY_NAMED_IAM al desplegar.
-  ClasificarIaRol:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub telecorp-${Stage}-clasificar-ia-rol
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: invocar-bedrock
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                Resource:
-                  # Perfil de inferencia (el perfil "us." enruta entre regiones de EE. UU.).
-                  - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${ModeloIa}
-                  # Modelos base subyacentes: región con comodín porque el perfil
-                  # puede atender la solicitud desde cualquier región del grupo.
-                  - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.*
-
   ClasificarIa:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub telecorp-${Stage}-clasificar-ia
-      Description: Clasifica incidencias, resume colectivos y redacta avisos con Amazon Bedrock (respaldo por reglas)
+      Description: Clasifica incidencias, resume colectivos y redacta avisos con Azure OpenAI (respaldo por reglas)
       CodeUri: ../src/clasificar_ia/
       Handler: app.handler
       Runtime: python3.12
       Architectures: [arm64]
       MemorySize: 512
       Timeout: 15
-      Role: !GetAtt ClasificarIaRol.Arn
+      Role: !Ref RolLabArn
       Layers:
         - !Ref ComunLayerArn
       Environment:
         Variables:
           STAGE: !Ref Stage
           POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-clasificar-ia
-          MODELO_IA: !Ref ModeloIa
+          COGNITO_PROVEEDOR_DESARROLLADOR: telecorp.aws
+          # Configuración en SSM /telecorp/<stage>/azure/{tenant-id,client-id,openai-endpoint,
+          # openai-deployment} y /telecorp/<stage>/aws/identity-pool-id (ver docs/federacion.md).
 
 Outputs:
   ClasificarIaArn:
     Description: ARN de la Lambda clasificar-ia
     Value: !GetAtt ClasificarIa.Arn
-  ClasificarIaRolArn:
-    Description: ARN del rol de ejecución 
-    Value: !GetAtt ClasificarIaRol.Arn
