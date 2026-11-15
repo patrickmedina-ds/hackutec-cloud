@@ -1,0 +1,436 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Red TeleCorp · bloque A · Orquestación. Tres Step Functions (ciclo-vida, colectivo,
+  recurrencia), sus reglas de EventBridge sobre el bus telecorp-<stage>-eventos, el
+  horario de EventBridge Scheduler y tres Lambdas auxiliares que usan la capa común.
+  El bus, las tablas y la Lambda clasificar-ia los crean otros stacks: se referencian
+  por nombre determinista (contratos/README.md).
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedPattern: "^[a-z0-9-]+$"
+  ComunLayerArn:
+    Type: String
+    Description: ARN de la capa telecorp_comun
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 60
+    Tracing: Active
+    CodeUri: ../src/sfn_tareas/
+    Layers:
+      - !Ref ComunLayerArn
+    LoggingConfig:
+      LogFormat: JSON
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+        BUS_EVENTOS: !Sub telecorp-${Stage}-eventos
+        TABLA_INCIDENCIAS: !Sub telecorp-${Stage}-incidencias
+        TABLA_HISTORIAL: !Sub telecorp-${Stage}-historial-estados
+        TABLA_ZONA_VENTANA: !Sub telecorp-${Stage}-zona-ventana
+        TABLA_ZONAS: !Sub telecorp-${Stage}-zonas
+        TABLA_ANTENAS: !Sub telecorp-${Stage}-antenas
+        TABLA_METRICAS: !Sub telecorp-${Stage}-metricas-antena
+
+Resources:
+  # ------------------------------------------------------------------ Lambdas auxiliares
+  # Solo hacen lo que necesita la capa común: prioridad y transiciones de estado.
+
+  FuncionSfnClasificacion:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-sfn-clasificacion
+      Description: ciclo-vida · prioridad de un reporte y transición REGISTRADA → EN_REVISION
+      Handler: clasificacion.handler
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-sfn-clasificacion
+      Policies:
+        - Statement:
+            - Sid: IncidenciasLecturaEscritura
+              Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:PutItem]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-incidencias
+            - Sid: HistorialSoloInsercion
+              Effect: Allow
+              Action: [dynamodb:PutItem]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-historial-estados
+
+  FuncionSfnColectivo:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-sfn-colectivo
+      Description: colectivo · crear colectiva/proactiva, escalar, restablecer y mover hijos
+      Handler: colectivo.handler
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-sfn-colectivo
+      Policies:
+        - Statement:
+            - Sid: IncidenciasLecturaEscritura
+              Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:PutItem]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-incidencias
+            - Sid: HijosPorColectivo
+              Effect: Allow
+              Action: [dynamodb:Query]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-incidencias/index/por-colectivo
+            - Sid: HistorialSoloInsercion
+              Effect: Allow
+              Action: [dynamodb:PutItem]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-historial-estados
+            - Sid: MarcadorColectivo
+              Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-zona-ventana
+            - Sid: CatalogoZonas
+              Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-zonas
+
+  FuncionSfnRecurrencia:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-sfn-recurrencia
+      Description: recurrencia · episodios de degradación por antena e incidencia REC idempotente
+      Handler: recurrencia.handler
+      Timeout: 120
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-sfn-recurrencia
+      Policies:
+        - Statement:
+            - Sid: MetricasLectura
+              Effect: Allow
+              Action: [dynamodb:Query]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-metricas-antena
+            - Sid: IncidenciasLecturaEscritura
+              Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:PutItem]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-incidencias
+            - Sid: HistorialSoloInsercion
+              Effect: Allow
+              Action: [dynamodb:PutItem]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-historial-estados
+            - Sid: CatalogoZonas
+              Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-zonas
+
+  LogFuncionSfnClasificacion:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/telecorp-${Stage}-sfn-clasificacion
+      RetentionInDays: 30
+
+  LogFuncionSfnColectivo:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/telecorp-${Stage}-sfn-colectivo
+      RetentionInDays: 30
+
+  LogFuncionSfnRecurrencia:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/telecorp-${Stage}-sfn-recurrencia
+      RetentionInDays: 30
+
+  # ------------------------------------------------------------------ Logs de las SFN
+
+  LogCicloVida:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/vendedlogs/states/telecorp-${Stage}-ciclo-vida
+      RetentionInDays: 30
+
+  LogColectivo:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/vendedlogs/states/telecorp-${Stage}-colectivo
+      RetentionInDays: 30
+
+  LogRecurrencia:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/vendedlogs/states/telecorp-${Stage}-recurrencia
+      RetentionInDays: 30
+
+  # ------------------------------------------------------------------ ciclo-vida
+  # EXPRESS: un evento por cada cambio de estado de cada reporte (alto volumen),
+  # ejecuciones cortas (< 1 min: 2 lecturas, IA, una escritura o dos envíos) y
+  # sin esperas. Cuesta mucho menos que Standard. Su semántica "al menos una vez"
+  # es aceptable: solo transiciona desde REGISTRADA (transicionar() valida el
+  # estado con control optimista) y un aviso duplicado es inocuo.
+
+  SfnCicloVida:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub telecorp-${Stage}-ciclo-vida
+      Type: EXPRESS
+      DefinitionUri: ../statemachines/ciclo_vida.asl.json
+      DefinitionSubstitutions:
+        TablaIncidencias: !Sub telecorp-${Stage}-incidencias
+        TablaZonas: !Sub telecorp-${Stage}-zonas
+        BusEventos: !Sub telecorp-${Stage}-eventos
+        FuncionIA: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:telecorp-${Stage}-clasificar-ia
+        FuncionClasificacion: !GetAtt FuncionSfnClasificacion.Arn
+        ParametroRemitente: !Sub /telecorp/${Stage}/aws/ses-remitente
+      Logging:
+        Level: ALL
+        # Los reportes llevan PII (teléfono, correo): no se registran datos de ejecución.
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt LogCicloVida.Arn
+      Tracing:
+        Enabled: true
+      Policies:
+        - Statement:
+            - Sid: LecturaIncidenciasYZonas
+              Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource:
+                - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-incidencias
+                - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-zonas
+            - Sid: InvocarIAyAuxiliar
+              Effect: Allow
+              Action: [lambda:InvokeFunction]
+              Resource:
+                - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:telecorp-${Stage}-clasificar-ia
+                - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:telecorp-${Stage}-clasificar-ia:*
+                - !GetAtt FuncionSfnClasificacion.Arn
+                - !Sub "${FuncionSfnClasificacion.Arn}:*"
+            - Sid: SmsDirectoANumero
+              # SNS Publish a un número de teléfono no tiene ARN de recurso.
+              Effect: Allow
+              Action: [sns:Publish]
+              Resource: "*"
+            - Sid: CorreoSes
+              Effect: Allow
+              Action: [ses:SendEmail]
+              Resource:
+                - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+                - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/*
+            - Sid: RemitenteCorreo
+              Effect: Allow
+              Action: [ssm:GetParameter]
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/telecorp/${Stage}/aws/ses-remitente
+            - Sid: NotificacionFallida
+              Effect: Allow
+              Action: [events:PutEvents]
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/telecorp-${Stage}-eventos
+              Condition:
+                StringEquals:
+                  events:source: telecorp.notificaciones
+            - Sid: EntregaDeLogs
+              # Las acciones de entrega de logs de Step Functions no admiten ARN de recurso.
+              Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+            - Sid: XRay
+              Effect: Allow
+              Action: [xray:PutTraceSegments, xray:PutTelemetryRecords, xray:GetSamplingRules, xray:GetSamplingTargets]
+              Resource: "*"
+      Events:
+        CambioEstadoIndividual:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Sub telecorp-${Stage}-eventos
+            RuleName: !Sub telecorp-${Stage}-ciclo-vida
+            # Las COLECTIVA no entran: sus hijos notifican cada uno. REGISTRADA y
+            # CERRADA no notifican; REGISTRADA solo dispara la clasificación.
+            Pattern:
+              source: [telecorp.incidencias]
+              detail-type: [Incidencia.CambioEstado]
+              detail:
+                estadoNuevo: [REGISTRADA, EN_REVISION, ATENDIDA, SOLUCIONADA]
+                snapshot:
+                  clase: [INDIVIDUAL]
+            RetryPolicy:
+              MaximumRetryAttempts: 10
+              MaximumEventAgeInSeconds: 3600
+            DeadLetterConfig:
+              Type: SQS
+              QueueLogicalId: DlqCicloVida
+
+  # ------------------------------------------------------------------ colectivo
+
+  SfnColectivo:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub telecorp-${Stage}-colectivo
+      Type: STANDARD
+      DefinitionUri: ../statemachines/colectivo.asl.json
+      DefinitionSubstitutions:
+        TablaIncidencias: !Sub telecorp-${Stage}-incidencias
+        TablaZonas: !Sub telecorp-${Stage}-zonas
+        TablaZonaVentana: !Sub telecorp-${Stage}-zona-ventana
+        TablaAntenas: !Sub telecorp-${Stage}-antenas
+        FuncionIA: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:telecorp-${Stage}-clasificar-ia
+        FuncionColectivo: !GetAtt FuncionSfnColectivo.Arn
+      Logging:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt LogColectivo.Arn
+      Tracing:
+        Enabled: true
+      Policies:
+        - Statement:
+            - Sid: LecturaTablas
+              Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource:
+                - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-incidencias
+                - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-zonas
+                - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-zona-ventana
+            - Sid: AntenasPorZona
+              Effect: Allow
+              Action: [dynamodb:Query]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-antenas/index/por-zona
+            - Sid: AgregarAntenaAfectada
+              Effect: Allow
+              Action: [dynamodb:UpdateItem]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-incidencias
+            - Sid: InvocarIAyAuxiliar
+              Effect: Allow
+              Action: [lambda:InvokeFunction]
+              Resource:
+                - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:telecorp-${Stage}-clasificar-ia
+                - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:telecorp-${Stage}-clasificar-ia:*
+                - !GetAtt FuncionSfnColectivo.Arn
+                - !Sub "${FuncionSfnColectivo.Arn}:*"
+            - Sid: EntregaDeLogs
+              Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+            - Sid: XRay
+              Effect: Allow
+              Action: [xray:PutTraceSegments, xray:PutTelemetryRecords, xray:GetSamplingRules, xray:GetSamplingTargets]
+              Resource: "*"
+      Events:
+        UmbralZona:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Sub telecorp-${Stage}-eventos
+            RuleName: !Sub telecorp-${Stage}-colectivo-umbral
+            Pattern:
+              source: [telecorp.zonas]
+              detail-type: [Zona.UmbralSuperado]
+            RetryPolicy:
+              MaximumRetryAttempts: 10
+              MaximumEventAgeInSeconds: 3600
+            DeadLetterConfig:
+              Type: SQS
+              QueueLogicalId: DlqColectivoUmbral
+        CambioAntena:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Sub telecorp-${Stage}-eventos
+            RuleName: !Sub telecorp-${Stage}-colectivo-antena
+            # Incluye estadoNuevo = NORMAL para cerrar colectivos al restablecerse
+            # (ver contratos/CAMBIOS_PROPUESTOS_A.md).
+            Pattern:
+              source: [telecorp.antenas]
+              detail-type: [Antena.CambioEstado]
+            RetryPolicy:
+              MaximumRetryAttempts: 10
+              MaximumEventAgeInSeconds: 3600
+            DeadLetterConfig:
+              Type: SQS
+              QueueLogicalId: DlqColectivoAntena
+
+  # ------------------------------------------------------------------ recurrencia
+
+  SfnRecurrencia:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub telecorp-${Stage}-recurrencia
+      Type: STANDARD
+      DefinitionUri: ../statemachines/recurrencia.asl.json
+      DefinitionSubstitutions:
+        TablaAntenas: !Sub telecorp-${Stage}-antenas
+        FuncionRecurrencia: !GetAtt FuncionSfnRecurrencia.Arn
+      Logging:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt LogRecurrencia.Arn
+      Tracing:
+        Enabled: true
+      Policies:
+        - Statement:
+            - Sid: RecorrerAntenas
+              Effect: Allow
+              Action: [dynamodb:Scan]
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/telecorp-${Stage}-antenas
+            - Sid: InvocarAuxiliar
+              Effect: Allow
+              Action: [lambda:InvokeFunction]
+              Resource:
+                - !GetAtt FuncionSfnRecurrencia.Arn
+                - !Sub "${FuncionSfnRecurrencia.Arn}:*"
+            - Sid: EntregaDeLogs
+              Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+            - Sid: XRay
+              Effect: Allow
+              Action: [xray:PutTraceSegments, xray:PutTelemetryRecords, xray:GetSamplingRules, xray:GetSamplingTargets]
+              Resource: "*"
+      Events:
+        Diario:
+          Type: ScheduleV2
+          Properties:
+            Name: !Sub telecorp-${Stage}-recurrencia-diaria
+            Description: Detección diaria de fallas recurrentes de antenas
+            ScheduleExpression: cron(0 2 * * ? *)
+            ScheduleExpressionTimezone: America/Lima
+            FlexibleTimeWindow:
+              Mode: "OFF"
+            # Scheduler reemplaza el atributo de contexto por la hora programada (UTC).
+            Input: '{"fechaReferencia": "<aws.scheduler.scheduled-time>"}'
+            RetryPolicy:
+              MaximumRetryAttempts: 3
+              MaximumEventAgeInSeconds: 3600
+
+Outputs:
+  CicloVidaArn:
+    Value: !Ref SfnCicloVida
+  ColectivoArn:
+    Value: !Ref SfnColectivo
+  RecurrenciaArn:
+    Value: !Ref SfnRecurrencia
