@@ -284,7 +284,7 @@ Resources:
       SourceParameters:
         FilterCriteria:
           Filters:
-            - Pattern: '{"eventName":["INSERT"],"dynamodb":{"NewImage":{"sk":{"S":["COLECTIVO_ACTIVO"]}}}}'
+            - Pattern: '{"eventName":["INSERT"],"dynamodb":{"NewImage":{"sk":{"S":["COLECTIVO_ACTIVO"]},"incidenteColectivoId":{"S":[{"prefix":"COL-"}]}}}}'
         DynamoDBStreamParameters:
           StartingPosition: LATEST
           BatchSize: 10

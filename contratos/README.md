@@ -90,3 +90,15 @@ Cada stack anidado recibe **exactamente** estos parámetros desde la raíz:
 | I · Datos y scripts | Haiku | `datos/`, `scripts/`, `README.md` raíz |
 
 Nadie edita `contratos/` ni `aws/layers/comun/` durante la fase 1.
+
+## Decisiones de integración (fase 2)
+
+Detalle de cada bloque en `contratos/CAMBIOS_PROPUESTOS_*.md`. Quedan aceptadas:
+
+- La regla de `colectivo` también recibe `Antena.CambioEstado` con `estadoNuevo = NORMAL`, para restablecer el servicio.
+- Los ids de recurrencia son `REC-<antenaId>-<año>-W<semana>` (uno por antena y semana) y los proactivos son `ANT-<ulid>` deterministas.
+- El Pipe de `zona-ventana` solo emite `Zona.UmbralSuperado` para marcadores `COL-…`. Los marcadores `ANT-…` de colectivos proactivos no generan evento.
+- Remitente de correo: parámetro SSM `/telecorp/<stage>/aws/ses-remitente` (variable `SES_REMITENTE` en `deploy.sh`).
+- Azure agrega el contenedor `eventos_procesados` (idempotencia por `ce_id`). Las salidas de Terraform de la federación llevan el prefijo `federacion_`.
+- La federación saliente de IAM debe estar activada en la cuenta: `deploy.sh` la activa.
+- `Stage` solo admite minúsculas y dígitos, sin guiones (por el dominio de Cognito y la regla de IoT).

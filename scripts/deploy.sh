@@ -9,6 +9,7 @@
 #   AWS_REGION  región de AWS (por defecto: us-east-1)
 #   PYTHON      intérprete de Python 3.12 (por defecto: python3)
 #   GCP_PROJECT_ID  proyecto de Google Cloud (o defínelo en gcp/terraform/terraform.tfvars)
+#   SES_REMITENTE   correo remitente verificado en SES (p. ej. avisos@tu-dominio.com)
 #   SWA_DIR     carpeta de la página de estado (por defecto: azure/status-page)
 
 set -euo pipefail
@@ -111,6 +112,13 @@ ssm_guardar "gcp/region"               "$GCP_REGION"
 ssm_guardar "azure/tenant-id"          "$AZ_TENANT"
 ssm_guardar "azure/client-id"          "$AZ_CLIENTE"
 ssm_guardar "azure/eventgrid-endpoint" "$AZ_EVENTGRID"
+if [[ -n "${SES_REMITENTE:-}" ]]; then
+  ssm_guardar "aws/ses-remitente" "$SES_REMITENTE"
+  aws sesv2 create-email-identity --email-identity "$SES_REMITENTE" --region "$REGION" >/dev/null 2>&1 \
+    && info "SES envió un correo de verificación a ${SES_REMITENTE}." || true
+else
+  info "SES_REMITENTE no definido: los correos de AWS fallarán y Azure los reenviará como respaldo."
+fi
 
 # ---------------------------------------------------------------------------
 paso "4/6" "Sembrando zonas y antenas en DynamoDB"

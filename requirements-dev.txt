@@ -3,3 +3,6 @@ moto[all]
 pytest
 jsonschema
 cfn-lint
+aws-sam-translator
+google-auth
+requests
