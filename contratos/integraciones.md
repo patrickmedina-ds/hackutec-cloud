@@ -1,22 +1,24 @@
 # Integraciones
 
-## 1. API Gateway → SQS (`telecorp-<stage>-reportes`)
+## 1. API pública → SQS (`telecorp-<stage>-reportes`)
 
-`POST /incidencias` usa integración directa de API Gateway con SQS (`SendMessage`), sin Lambda. La plantilla de mapeo arma este cuerpo:
+`POST /reportes` (público, sin login) lo atiende la Lambda `api-publica`: valida que la persona tenga un contrato en la tabla `clientes` (por DNI vía GSI `por-documento` o por número de servicio) y encola este cuerpo con `SendMessage`. `POST /incidencias` (autenticado, compatibilidad) usa la misma Lambda y validación; ya no hay integración directa API Gateway → SQS.
 
 ```json
 {
-  "incidenciaId": "$context.requestId",
-  "usuarioId": "$context.authorizer.claims.sub",
-  "recibidoEn": "$context.requestTimeEpoch",
+  "incidenciaId": "<uuid4>",
+  "usuarioId": "cliente:SRV-00000001",
+  "recibidoEn": 1763215980000,
   "reporte": {
-    "documento": "...", "numeroServicio": "...", "telefono": "+51...", "email": "...",
-    "zonaId": "LIM-MIR-01", "lat": -12.12, "lon": -77.03,
+    "documento": "...", "numeroServicio": "SRV-00000001", "telefono": "+51...", "email": "...",
+    "zonaId": "LIM-JMA-01",
     "fechaHoraEvento": "2026-11-15T13:55:00Z", "tipo": "SIN_INTERNET", "descripcion": "..."
   }
 }
 ```
-La API responde `202 {"incidenciaId": "<requestId>", "estado": "REGISTRADA"}`.
+`documento`, `numeroServicio`, `telefono`, `email` y `zonaId` salen **del contrato**, nunca del cuerpo de la petición. `lat`/`lon` siguen siendo opcionales para otros productores (el simulador por SQS). `recibidoEn` en epoch ms. La API responde `202 {"incidenciaId", "estado": "REGISTRADA", "zonaId", "zonaNombre"}`; errores `404 CLIENTE_NO_ENCONTRADO`, `409 VARIOS_SERVICIOS`, `403 CONTRATO_SUSPENDIDO` (ver `openapi.yaml`).
+
+`POST /reportes/consulta` (DNI + número de servicio del mismo contrato) devuelve los reportes del GSI `por-usuario` con `usuarioId = cliente:<numeroServicio>` y su historial, sin PII.
 
 Cola: visibilidad 60 s, `maxReceiveCount` 5 → DLQ (retención 14 días). `registrar-reporte` consume en lotes de 10 con `ReportBatchItemFailures` y es idempotente (`registrar_inicial()` ignora un `incidenciaId` ya existente).
 

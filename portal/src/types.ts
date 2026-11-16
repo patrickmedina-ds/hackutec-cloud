@@ -24,17 +24,55 @@ export type Nivel = 'P1' | 'P2' | 'P3' | 'P4';
 export type EstadoAntena = 'NORMAL' | 'CAIDA' | 'SATURADA' | 'INHABILITADA';
 export type Rol = 'operador' | 'usuario';
 
-export interface NuevoReporte {
-  documento: string;
-  numeroServicio: string;
-  telefono?: string;
-  email?: string;
-  zonaId: string;
-  lat?: number;
-  lon?: number;
-  fechaHoraEvento: string;
+/** Cuerpo de POST /reportes (público). Zona y contacto los pone el backend desde el contrato. */
+export interface ReportePublico {
+  documento?: string;
+  numeroServicio?: string;
   tipo: TipoProblema;
   descripcion: string;
+  fechaHoraEvento?: string;
+}
+
+export interface ReporteAceptado {
+  incidenciaId: string;
+  estado: 'REGISTRADA';
+  zonaId: string;
+  zonaNombre: string;
+}
+
+/** Servicio enmascarado devuelto con 409 VARIOS_SERVICIOS. */
+export interface ServicioOpcion {
+  numeroServicio: string;
+  zonaId: string;
+  zonaNombre: string;
+}
+
+export interface ReporteConsultado {
+  incidenciaId: string;
+  estado: Estado;
+  zonaId: string;
+  tipo: TipoProblema;
+  descripcion?: string;
+  fechaHoraEvento?: string;
+  nivelPrioridad?: Nivel | null;
+  incidenteColectivoId?: string | null;
+  creadoEn: string;
+  actualizadoEn?: string;
+  resueltoEn?: string | null;
+  historial: Transicion[];
+}
+
+export interface RespuestaConsulta {
+  servicio: string;
+  zonaId: string;
+  zonaNombre: string;
+  reportes: ReporteConsultado[];
+}
+
+/** API pública (sin login): cliente real y modo demo. */
+export interface ApiPublica {
+  reportarFalla(r: ReportePublico): Promise<ReporteAceptado>;
+  consultarReportes(documento: string, numeroServicio: string): Promise<RespuestaConsulta>;
 }
 
 export interface Incidencia {
@@ -124,7 +162,6 @@ export interface RespuestaAnalitica<R extends Reporte = Reporte> {
 
 /** Contrato común del cliente real y del modo demostración. */
 export interface Api {
-  crearReporte(r: NuevoReporte): Promise<{ incidenciaId: string; estado: 'REGISTRADA' }>;
   listarIncidencias(f?: FiltrosIncidencias): Promise<Pagina>;
   obtenerIncidencia(id: string): Promise<Incidencia>;
   historial(id: string): Promise<Transicion[]>;
@@ -144,6 +181,8 @@ export class ApiError extends Error {
     public status: number,
     public codigo: string,
     mensaje: string,
+    /** Cuerpo completo del error (p. ej. `servicios` en 409 VARIOS_SERVICIOS). */
+    public datos: Record<string, unknown> = {},
   ) {
     super(mensaje);
     this.name = 'ApiError';

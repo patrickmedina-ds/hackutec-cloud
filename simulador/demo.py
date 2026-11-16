@@ -22,6 +22,7 @@ from comun import (
     ahora_utc,
     antenas_de_zona,
     cargar_antenas,
+    cargar_clientes,
     cargar_zonas,
     clasificar,
     exigir_zona,
@@ -65,8 +66,9 @@ def _pausa(segundos: float) -> None:
 
 def construir_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Guion de demo para el pitch de Red TeleCorp.")
-    parser.add_argument("--destino", choices=("stdout", "kinesis", "iot", "sqs"), default="stdout",
-                        help="Adónde enviar: kinesis/iot para telemetría, sqs para reportes; stdout por defecto.")
+    parser.add_argument("--destino", choices=("stdout", "kinesis", "iot", "sqs", "api"), default="stdout",
+                        help="Adónde enviar: kinesis/iot para telemetría; sqs o api (POST /reportes) para reportes.")
+    parser.add_argument("--api-url", help="URL base de la API (destino api).")
     parser.add_argument("--dry-run", action="store_true", help="No llama a la nube; solo muestra lo que enviaría.")
     parser.add_argument("--zona", default=ZONA_DEMO_POR_DEFECTO, help="Zona que cae en el paso 2 y recibe reportes.")
     parser.add_argument("--stage", default=stage_por_defecto(), help="Stage de despliegue.")
@@ -94,12 +96,13 @@ def _ejecutar(args: argparse.Namespace) -> int:
     datos = ruta_datos(args.datos)
     zonas = cargar_zonas(datos)
     antenas = cargar_antenas(datos)
+    clientes = cargar_clientes(datos)
     zona = exigir_zona(zonas, args.zona)
     if not antenas_de_zona(antenas, zona["zonaId"]):
         raise ErrorSimulador(f"la zona {zona['zonaId']} no tiene antenas en los datos")
 
     destino_telemetria = args.destino if args.destino in ("kinesis", "iot") else "stdout"
-    destino_reportes = "sqs" if args.destino == "sqs" else "stdout"
+    destino_reportes = args.destino if args.destino in ("sqs", "api") else "stdout"
     modo = "dry-run" if args.dry_run else "envío real"
     rng = random.Random(args.semilla)
     publicar = dict(stage=args.stage, region=args.region, iot_endpoint=args.iot_endpoint, dry_run=args.dry_run)
@@ -132,20 +135,21 @@ def _ejecutar(args: argparse.Namespace) -> int:
     _pausa(args.pausa)
 
     # Paso 3: reportes de usuarios en la zona caída.
-    _titulo(3, f"{USUARIOS_DEMO} usuarios reportan {TIPO_DEMO} en {zona['zonaId']} en {MINUTOS_DEMO} minutos")
-    plan = sim_reportes.plan_masivo(zona, USUARIOS_DEMO, MINUTOS_DEMO, TIPO_DEMO, rng, ahora_utc())
+    _titulo(3, f"{USUARIOS_DEMO} clientes con contrato reportan {TIPO_DEMO} en {zona['zonaId']} en {MINUTOS_DEMO} minutos")
+    plan = sim_reportes.plan_masivo(zona, clientes, USUARIOS_DEMO, MINUTOS_DEMO, TIPO_DEMO, rng, ahora_utc())
     usuarios_distintos = len({it["usuarioId"] for it in plan})
-    print(f"  Reportes generados: {len(plan)} · usuarios distintos: {usuarios_distintos}")
-    enviados = sim_reportes.enviar_reportes(plan, destino_reportes, **{k: v for k, v in publicar.items()
-                                                                     if k != "iot_endpoint"})
+    print(f"  Reportes generados: {len(plan)} · clientes distintos: {usuarios_distintos}")
+    enviados = sim_reportes.enviar_reportes(plan, destino_reportes, api_url=args.api_url,
+                                            **{k: v for k, v in publicar.items() if k != "iot_endpoint"})
     print(f"  Reportes {'simulados' if args.dry_run else 'enviados'}: {enviados}")
     _esperado([
-        "API Gateway responde 202 y envía cada reporte a SQS telecorp-<stage>-reportes (contrato sección 1).",
+        "Cada cliente se valida contra la tabla de contratos (api-publica responde 202) y el reporte "
+        "llega a SQS telecorp-<stage>-reportes (contrato sección 1) con la zona y el contacto del contrato.",
         "registrar-reporte crea 12 incidencias REGISTRADA; si se repite un mensaje, no se duplica.",
         f"Con {usuarios_distintos} usuarios distintos en la zona (umbral: {UMBRAL_USUARIOS_COLECTIVO} "
         f"en menos de {VENTANA_COLECTIVO_HORAS} h) debería abrirse un incidente colectivo.",
         "La verificación de infraestructura cruza el incidente colectivo con la caída de antenas de la zona.",
-        "clasificar-ia asigna tipo y severidad a cada incidencia, o usa reglas locales si Bedrock no responde.",
+        "clasificar-ia asigna tipo y severidad a cada incidencia, o usa reglas locales si Azure OpenAI no responde.",
     ])
 
     print()

@@ -17,7 +17,7 @@ os.environ.setdefault("AWS_SECURITY_TOKEN", "testing")
 os.environ.setdefault("AWS_SESSION_TOKEN", "testing")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
-from comun import cargar_antenas, cargar_zonas, DATOS_EJEMPLO  # noqa: E402
+from comun import cargar_antenas, cargar_clientes, cargar_zonas, DATOS_EJEMPLO  # noqa: E402
 
 
 @pytest.fixture
@@ -34,3 +34,9 @@ def zonas(datos_ejemplo):
 @pytest.fixture
 def antenas(datos_ejemplo):
     return datos_ejemplo[1]
+
+
+@pytest.fixture
+def clientes():
+    """Contratos de ejemplo de simulador/datos_ejemplo/clientes.json."""
+    return cargar_clientes(DATOS_EJEMPLO)

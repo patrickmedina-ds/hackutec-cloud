@@ -3,9 +3,11 @@ info:
   title: Red TeleCorp · API de incidencias
   version: 1.0.0
   description: |
-    Autenticación con Cognito User Pool (JWT en `Authorization`).
-    Grupo `operadores`: acceso a todas las incidencias y a cambiar estados.
-    Usuarios normales: solo sus propias incidencias.
+    Reportar una falla y consultar sus reportes es **público** (`POST /reportes`,
+    `POST /reportes/consulta`): solo pueden hacerlo personas con un contrato registrado en la
+    tabla `clientes`, identificadas por DNI o número de servicio.
+    El resto usa Cognito User Pool (JWT en `Authorization`) y es para el personal:
+    grupo `operadores`, acceso a todas las incidencias y a cambiar estados.
 servers:
   - url: https://{apiId}.execute-api.us-east-1.amazonaws.com/{stage}
     variables:
@@ -14,14 +16,20 @@ servers:
 security:
   - cognito: []
 paths:
-  /incidencias:
+  /reportes:
     post:
-      summary: Registrar un reporte (integración directa a SQS)
+      summary: Reportar una falla (público, solo clientes con contrato)
+      description: |
+        Al menos uno de `documento` o `numeroServicio`. Si ambos vienen, deben ser del mismo contrato.
+        Tras un 409, `numeroServicio` puede ser el valor enmascarado devuelto (`SRV-****0012`) junto al DNI.
+        Zona, teléfono y correo se toman del contrato (cualquier otro campo del cuerpo se ignora) y se
+        encola en SQS el mensaje de integraciones.md §1 con `usuarioId = cliente:<numeroServicio>`.
+      security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/NuevoReporte' }
+            schema: { $ref: '#/components/schemas/ReportePublico' }
       responses:
         '202':
           description: Aceptado y encolado
@@ -30,8 +38,82 @@ paths:
               schema:
                 type: object
                 properties:
-                  incidenciaId: { type: string }
+                  incidenciaId: { type: string, format: uuid }
                   estado: { type: string, enum: [REGISTRADA] }
+                  zonaId: { type: string }
+                  zonaNombre: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '403':
+          description: '`CONTRATO_SUSPENDIDO`'
+          content:
+            application/json:
+              schema: { type: object, properties: { codigo: { type: string }, mensaje: { type: string } } }
+        '404':
+          description: '`CLIENTE_NO_ENCONTRADO` · "No encontramos un servicio con esos datos"'
+          content:
+            application/json:
+              schema: { type: object, properties: { codigo: { type: string }, mensaje: { type: string } } }
+        '409':
+          description: '`VARIOS_SERVICIOS`: el DNI tiene más de un servicio y no se indicó cuál'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  codigo: { type: string, enum: [VARIOS_SERVICIOS] }
+                  mensaje: { type: string }
+                  servicios:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        numeroServicio: { type: string, example: 'SRV-****0012' }
+                        zonaId: { type: string }
+                        zonaNombre: { type: string }
+  /reportes/consulta:
+    post:
+      summary: Consultar los reportes de un servicio (público)
+      description: DNI y número de servicio deben ser del mismo contrato; si no, 404 genérico. La respuesta no lleva PII.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documento, numeroServicio]
+              properties:
+                documento: { type: string, pattern: '^[0-9]{8}$' }
+                numeroServicio: { type: string, pattern: '^SRV-[0-9]{8}$' }
+      responses:
+        '200':
+          description: Reportes del servicio, del más reciente al más antiguo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  servicio: { type: string, example: 'SRV-****0001' }
+                  zonaId: { type: string }
+                  zonaNombre: { type: string }
+                  reportes:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReporteConsultado' }
+        '404': { $ref: '#/components/responses/Error' }
+  /incidencias:
+    post:
+      summary: Registrar un reporte autenticado (compatibilidad)
+      description: |
+        Misma Lambda y validación de contrato que `POST /reportes` (antes era integración directa a SQS sin
+        validar el contrato). El portal ya no lo usa.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportePublico' }
+      responses:
+        '202':
+          description: Igual que `POST /reportes`
         '400': { $ref: '#/components/responses/Error' }
     get:
       summary: Listar incidencias (operador; un usuario normal solo ve las suyas)
@@ -207,20 +289,32 @@ components:
     TipoProblema:
       type: string
       enum: [SIN_INTERNET, SIN_LLAMADAS, SIN_SMS, LENTITUD, INTERMITENCIA, OTRO]
-    NuevoReporte:
+    ReportePublico:
       type: object
-      required: [documento, numeroServicio, zonaId, fechaHoraEvento, tipo, descripcion]
+      required: [tipo, descripcion]
       properties:
-        documento: { type: string, minLength: 6, maxLength: 20 }
-        numeroServicio: { type: string, minLength: 6, maxLength: 20 }
-        telefono: { type: string, description: 'E.164, p. ej. +51987654321' }
-        email: { type: string, format: email }
-        zonaId: { type: string }
-        lat: { type: number }
-        lon: { type: number }
-        fechaHoraEvento: { type: string, format: date-time }
+        documento: { type: string, pattern: '^[0-9]{8}$', description: DNI del titular }
+        numeroServicio: { type: string, description: 'SRV-12345678 (o SRV-****1234 junto al DNI tras un 409)' }
         tipo: { $ref: '#/components/schemas/TipoProblema' }
-        descripcion: { type: string, maxLength: 1000 }
+        descripcion: { type: string, minLength: 1, maxLength: 1000 }
+        fechaHoraEvento: { type: string, format: date-time, description: Por defecto, ahora }
+    ReporteConsultado:
+      type: object
+      properties:
+        incidenciaId: { type: string }
+        estado: { $ref: '#/components/schemas/Estado' }
+        zonaId: { type: string }
+        tipo: { $ref: '#/components/schemas/TipoProblema' }
+        descripcion: { type: string }
+        fechaHoraEvento: { type: string, format: date-time }
+        nivelPrioridad: { type: string }
+        incidenteColectivoId: { type: string }
+        creadoEn: { type: string, format: date-time }
+        actualizadoEn: { type: string, format: date-time }
+        resueltoEn: { type: string, format: date-time }
+        historial:
+          type: array
+          items: { $ref: '#/components/schemas/Transicion' }
     Incidencia:
       type: object
       properties:

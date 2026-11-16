@@ -37,18 +37,6 @@ describe('cliente de la API', () => {
     expect((await api.listarIncidencias()).cursor).toBeNull();
   });
 
-  it('POST de reporte manda JSON y devuelve incidenciaId', async () => {
-    const { f, api } = setup(respuesta(202, { incidenciaId: 'req-1', estado: 'REGISTRADA' }));
-    const r = await api.crearReporte({
-      documento: '12345678', numeroServicio: '987654', zonaId: 'LIM-MIR', fechaHoraEvento: '2026-11-15T14:03:00Z', tipo: 'SIN_INTERNET', descripcion: 'x',
-    });
-    expect(r.incidenciaId).toBe('req-1');
-    const [, init] = f.mock.calls[0] as unknown as [string, RequestInit];
-    expect(init.method).toBe('POST');
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
-    expect(JSON.parse(init.body as string).zonaId).toBe('LIM-MIR');
-  });
-
   it('PATCH de estado escapa el id e incluye comentario solo si existe', async () => {
     const { f, api } = setup(respuesta(200, { incidenciaId: 'a/b' }));
     await api.cambiarEstado('a/b', 'ATENDIDA', 'en camino');

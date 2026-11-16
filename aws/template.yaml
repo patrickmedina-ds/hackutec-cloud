@@ -64,6 +64,7 @@ Globals:
         TABLA_ZONAS: !Sub telecorp-${Stage}-zonas
         TABLA_ANTENAS: !Sub telecorp-${Stage}-antenas
         TABLA_METRICAS: !Sub telecorp-${Stage}-metricas-antena
+        TABLA_CLIENTES: !Sub telecorp-${Stage}-clientes
 
 Resources:
   # ------------------------------------------------------------------ Capa común
@@ -181,6 +182,24 @@ Resources:
         - { AttributeName: antenaId, KeyType: HASH }
         - { AttributeName: ts, KeyType: RANGE }
       TimeToLiveSpecification: { AttributeName: ttl, Enabled: true }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  # Contratos de servicio: solo quien figura aquí (DNI o número de servicio) puede reportar.
+  TablaClientes:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub telecorp-${Stage}-clientes
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: numeroServicio, AttributeType: S }
+        - { AttributeName: documento, AttributeType: S }
+      KeySchema:
+        - { AttributeName: numeroServicio, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: por-documento
+          KeySchema: [{ AttributeName: documento, KeyType: HASH }, { AttributeName: numeroServicio, KeyType: RANGE }]
+          Projection: { ProjectionType: ALL }
       PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
       SSESpecification: { SSEEnabled: true }
 
@@ -404,7 +423,7 @@ Resources:
         AllowOrigin: !Sub "'${CorsOrigen}'"
         MaxAge: "'600'"
       Auth:
-        # Sin DefaultAuthorizer: cada método declara su `security` (GET /zonas queda público).
+        # Sin DefaultAuthorizer: cada método declara su `security` (GET /zonas, POST /reportes y POST /reportes/consulta quedan públicos).
         Authorizers:
           CognitoAuth:
             UserPoolArn: !GetAtt UserPool.Arn
@@ -431,7 +450,7 @@ Resources:
         paths:
           /incidencias:
             post:
-              summary: Registrar un reporte (integración directa a SQS)
+              summary: Registrar un reporte autenticado (compatibilidad; misma validación de contrato que /reportes)
               security:
                 - CognitoAuth: []
               x-amazon-apigateway-request-validator: cuerpo
@@ -440,48 +459,14 @@ Resources:
                 content:
                   application/json:
                     schema:
-                      $ref: '#/components/schemas/NuevoReporte'
+                      $ref: '#/components/schemas/ReportePublico'
               responses:
                 '202':
                   description: Aceptado y encolado
-                  headers:
-                    Access-Control-Allow-Origin:
-                      schema: { type: string }
-                  content:
-                    application/json:
-                      schema:
-                        $ref: '#/components/schemas/Aceptado'
-                '502':
-                  description: No se pudo encolar
-                  headers:
-                    Access-Control-Allow-Origin:
-                      schema: { type: string }
               x-amazon-apigateway-integration:
-                type: aws
+                type: aws_proxy
                 httpMethod: POST
-                uri: !Sub arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${ColaReportes.QueueName}
-                credentials: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
-                passthroughBehavior: never
-                requestParameters:
-                  integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
-                requestTemplates:
-                  application/json: |
-                    #set($reporte = $input.json('$'))
-                    #set($mensaje = "{""incidenciaId"": ""$context.requestId"", ""usuarioId"": ""$context.authorizer.claims.sub"", ""recibidoEn"": $context.requestTimeEpoch, ""reporte"": $reporte}")
-                    Action=SendMessage&MessageBody=$util.urlEncode($mensaje)
-                responses:
-                  '2\d{2}':
-                    statusCode: '202'
-                    responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigen}'"
-                    responseTemplates:
-                      application/json: '{"incidenciaId": "$context.requestId", "estado": "REGISTRADA"}'
-                  default:
-                    statusCode: '502'
-                    responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigen}'"
-                    responseTemplates:
-                      application/json: '{"codigo": "COLA_NO_DISPONIBLE", "mensaje": "No se pudo registrar el reporte"}'
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiPublica.Arn}/invocations
             get:
               summary: Listar incidencias
               security:
@@ -542,6 +527,42 @@ Resources:
                 type: aws_proxy
                 httpMethod: POST
                 uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
+          /reportes:
+            post:
+              summary: Reportar una falla (público; solo clientes con contrato, por DNI o número de servicio)
+              security: []
+              x-amazon-apigateway-request-validator: cuerpo
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/ReportePublico'
+              responses:
+                '202':
+                  description: Aceptado y encolado
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiPublica.Arn}/invocations
+          /reportes/consulta:
+            post:
+              summary: Consultar los reportes de un servicio (público; DNI + número de servicio)
+              security: []
+              x-amazon-apigateway-request-validator: cuerpo
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/ConsultaReportes'
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiPublica.Arn}/invocations
           /zonas:
             get:
               summary: Catálogo de zonas
@@ -627,22 +648,23 @@ Resources:
               properties:
                 incidenciaId: { type: string }
                 estado: { type: string }
-            NuevoReporte:
+            ReportePublico:
               type: object
-              required: [documento, numeroServicio, zonaId, fechaHoraEvento, tipo, descripcion]
+              required: [tipo, descripcion]
               properties:
-                documento: { type: string, minLength: 6, maxLength: 20 }
+                documento: { type: string, pattern: '^[0-9]{8}$' }
                 numeroServicio: { type: string, minLength: 6, maxLength: 20 }
-                telefono: { type: string, maxLength: 20 }
-                email: { type: string, maxLength: 254 }
-                zonaId: { type: string, minLength: 1, maxLength: 64 }
-                lat: { type: number }
-                lon: { type: number }
                 fechaHoraEvento: { type: string, minLength: 10, maxLength: 40 }
                 tipo:
                   type: string
                   enum: [SIN_INTERNET, SIN_LLAMADAS, SIN_SMS, LENTITUD, INTERMITENCIA, OTRO]
                 descripcion: { type: string, minLength: 1, maxLength: 1000 }
+            ConsultaReportes:
+              type: object
+              required: [documento, numeroServicio]
+              properties:
+                documento: { type: string, minLength: 1, maxLength: 20 }
+                numeroServicio: { type: string, minLength: 1, maxLength: 20 }
 
   WafApi:
     Type: AWS::WAFv2::WebACL
@@ -710,6 +732,28 @@ Resources:
           POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-api-incidencias
           USER_POOL_ID: !Ref UserPool
       Role: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
+
+  FuncionApiPublica:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub telecorp-${Stage}-api-publica
+      Description: Reportes públicos validados contra la tabla de clientes (contratos) y consulta por DNI + servicio
+      CodeUri: src/api_publica/
+      Handler: app.lambda_handler
+      Timeout: 15
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-api-publica
+          COLA_REPORTES_URL: !Ref ColaReportes
+      Role: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
+
+  PermisoApiPublica:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref FuncionApiPublica
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/POST/*
 
   PermisoApiIncidencias:
     Type: AWS::Lambda::Permission
@@ -875,6 +919,21 @@ Resources:
       Namespace: AWS/Lambda
       MetricName: Errors
       Dimensions: [{ Name: FunctionName, Value: !Ref FuncionApiIncidencias }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref TemaAlarmas]
+
+  AlarmaErroresApiPublica:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub telecorp-${Stage}-errores-api-publica
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref FuncionApiPublica }]
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 1

@@ -4,7 +4,7 @@ Plataforma **100 % serverless** para que Red TeleCorp reciba, priorice y atienda
 
 ## Qué resuelve
 
-- **Reportes de usuarios:** un portal web permite registrar una incidencia (identificación, número de servicio, ubicación, fecha y hora, tipo y descripción) y consultar su estado.
+- **Reportes de clientes (público, sin login):** cualquier persona con un **contrato de servicio registrado** reporta una falla en el portal con su DNI o su número de servicio, el tipo, la descripción y la hora. La zona y el contacto salen del contrato (tabla `telecorp-<stage>-clientes`); si no hay contrato, no puede reportar (404), si su DNI tiene varios servicios elige uno (409) y si el contrato está suspendido se rechaza (403). Con DNI + número de servicio consulta sus reportes y la línea de tiempo de estados. El login (Cognito) es solo para el personal: el botón **Acceso operadores** abre el Panel de operación.
 - **Ciclo de vida:** cada incidencia pasa por *Registrada → En revisión → Atendida → Solucionada → Cerrada*, y queda un historial de cada cambio.
 - **Incidentes colectivos:** si 10 o más usuarios distintos reportan en una misma zona en menos de 24 horas, se abre un incidente colectivo y se verifican las antenas de la zona.
 - **Telemetría de antenas:** cada antena publica su tráfico en GB/min. Menos de 60 GB/min es **caída**, más de 129 GB/min es **saturada** y 0 GB/min es **inhabilitada**.
@@ -86,7 +86,7 @@ Los pasos, en orden:
 1. **AWS:** `sam build` y `sam deploy` del stack `telecorp-<stage>`.
 2. **Azure:** activa la federación saliente de IAM y hace `terraform apply` en `azure/terraform`.
 3. **SSM:** se guardan los outputs de Terraform en `/telecorp/<stage>/azure/…` (tenant, client y endpoint de Event Grid) y el remitente de SES si se definió `SES_REMITENTE`.
-4. **Datos:** `scripts/seed_dynamodb.py` carga zonas y antenas.
+4. **Datos:** `scripts/seed_dynamodb.py` carga zonas, antenas y clientes (contratos). El cliente de demo usa el correo de `CORREO_DEMO` (por defecto `cliente.demo@example.com`).
 5. **Portal:** se genera `portal/public/config.json` con los outputs de CloudFormation, se hace `npm run build`, `aws s3 sync` y la invalidación de CloudFront.
 6. **Azure:** se publican las Azure Functions, se crea la suscripción de Event Grid y se publica la Static Web App.
 
@@ -99,10 +99,20 @@ STAGE=dev ./scripts/destroy.sh
 Para cargar solo los datos semilla (es idempotente):
 
 ```bash
-python scripts/seed_dynamodb.py --stage dev --region us-east-1
+python scripts/seed_dynamodb.py --stage dev --region us-east-1 --correo-demo cliente.demo@example.com
 ```
 
-Las zonas se sobrescriben. Las antenas que ya existen no se tocan, así que volver a cargar no reinicia el estado en vivo que escribe `evaluar-antena`.
+Las zonas y los clientes se sobrescriben. Las antenas que ya existen no se tocan, así que volver a cargar no reinicia el estado en vivo que escribe `evaluar-antena`.
+
+### Clientes de demo (`datos/clientes.json`)
+
+`datos/clientes.json` trae 18 contratos por zona (16 activos y 2 suspendidos) y estos clientes de demo:
+
+| DNI | Número de servicio | Zona | Para mostrar |
+|---|---|---|---|
+| `70000001` | `SRV-00000001` | `LIM-JMA-01` | Reporte normal; el aviso llega a **cliente.demo@example.com** (`--correo-demo` del seed) |
+| `70000002` | `SRV-00000002`, `SRV-00000003` | `LIM-JMA-01`, `LIM-MIR-01` | DNI con dos servicios (409, elegir servicio) |
+| `70000004` | `SRV-00000004` | `LIM-JMA-01` | Contrato suspendido (403) |
 
 ## Demo con el simulador
 

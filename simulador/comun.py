@@ -36,6 +36,8 @@ __all__ = [
     "antenas_de_zona",
     "ahora_utc",
     "cargar_antenas",
+    "cargar_clientes",
+    "clientes_activos",
     "cargar_zonas",
     "clasificar",
     "crear_cliente",
@@ -98,6 +100,19 @@ def cargar_zonas(ruta_dir: Path) -> list[dict]:
 def cargar_antenas(ruta_dir: Path) -> list[dict]:
     """Lee `antenas.json`: lista de {antenaId, zonaId, lat, lon}."""
     return _cargar_lista(ruta_dir, "antenas.json")
+
+
+def cargar_clientes(ruta_dir: Path) -> list[dict]:
+    """Lee `clientes.json` (contratos): {numeroServicio, documento, telefono, email, zonaId, estadoContrato, ...}."""
+    return _cargar_lista(ruta_dir, "clientes.json")
+
+
+def clientes_activos(clientes: list[dict], zona_id: str | None = None) -> list[dict]:
+    """Contratos ACTIVO (de una zona si se indica): solo ellos pueden reportar."""
+    return [
+        c for c in clientes
+        if c.get("estadoContrato") == "ACTIVO" and (zona_id is None or c["zonaId"] == zona_id)
+    ]
 
 
 def antenas_de_zona(antenas: list[dict], zona_id: str) -> list[dict]:

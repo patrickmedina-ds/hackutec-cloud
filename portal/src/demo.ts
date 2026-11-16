@@ -1,7 +1,7 @@
 import { puedeTransicionar } from './transiciones';
 import { ApiError } from './types';
 import type {
-  Antena, Api, Operador, Reporte, RespuestaAnalitica, Estado, FiltrosIncidencias, Incidencia, NuevoReporte, Pagina, Rol, Transicion, TipoProblema, Zona, Nivel, Severidad,
+  Antena, Api, Operador, Reporte, RespuestaAnalitica, Estado, FiltrosIncidencias, Incidencia, Pagina, Rol, Transicion, TipoProblema, Zona, Nivel, Severidad,
 } from './types';
 
 const MIN = 60_000;
@@ -120,7 +120,6 @@ export function crearDemo(rolInicial: Rol = 'operador'): Api {
   const historial = new Map<string, Transicion[]>();
   const propias = new Set<string>(); // reportes del usuario demo
   const antenas = antenasIniciales();
-  let contador = 100;
   const operadores: Operador[] = [
     { email: EMAIL_DEMO, nombre: 'Ana Operadora', creado: iso(40 * 1440 * MIN), estado: 'CONFIRMED' },
     { email: 'luis.turno@telecorp.pe', nombre: 'Luis Turno', creado: iso(12 * 1440 * MIN), estado: 'CONFIRMED' },
@@ -227,20 +226,6 @@ export function crearDemo(rolInicial: Rol = 'operador'): Api {
 
   return {
     setRolDemo(r) { rol = r; },
-    async crearReporte(r: NuevoReporte) {
-      await espera(350);
-      const id = `demo-${(++contador).toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-      const ahora = iso(0);
-      const inc: Incidencia = {
-        incidenciaId: id, clase: 'INDIVIDUAL', origen: 'USUARIO', estado: 'REGISTRADA', zonaId: r.zonaId, tipo: r.tipo,
-        descripcion: r.descripcion, fechaHoraEvento: r.fechaHoraEvento, tipoIA: null, severidadIA: null, resumenIA: null,
-        prioridad: null, nivelPrioridad: null, creadoEn: ahora, actualizadoEn: ahora, resueltoEn: null,
-      };
-      incidencias.push(inc);
-      propias.add(id);
-      historial.set(id, [{ estadoAnterior: null, estadoNuevo: 'REGISTRADA', actor: 'SISTEMA', comentario: 'Reporte recibido', ts: ahora }]);
-      return { incidenciaId: id, estado: 'REGISTRADA' as const };
-    },
     async listarIncidencias(f: FiltrosIncidencias = {}): Promise<Pagina> {
       await espera();
       let xs = ordenadas().filter((i) => rol === 'operador' || propias.has(i.incidenciaId));

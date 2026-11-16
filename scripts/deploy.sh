@@ -109,7 +109,8 @@ ssm_guardar "azure/openai-deployment"  "$AZ_OPENAI_DESPLIEGUE"
 
 # ---------------------------------------------------------------------------
 paso "4/6" "Sembrando zonas y antenas en DynamoDB"
-"$PYTHON" "${RAIZ}/scripts/seed_dynamodb.py" --stage "$STAGE" --region "$REGION"
+"$PYTHON" "${RAIZ}/scripts/seed_dynamodb.py" --stage "$STAGE" --region "$REGION" \
+  --correo-demo "${CORREO_DEMO:-cliente.demo@example.com}"
 
 # ---------------------------------------------------------------------------
 paso "5/6" "Portal: callback de Cognito, config.json, build y Azure Static Web App"

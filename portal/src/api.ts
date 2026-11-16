@@ -1,5 +1,5 @@
 import { ApiError } from './types';
-import type { Api, Estado, FiltrosIncidencias, Incidencia, NuevoReporte, Pagina, Transicion, Zona, Antena, EstadoAntena, Reporte, Operador } from './types';
+import type { Api, ApiPublica, Estado, FiltrosIncidencias, Incidencia, Pagina, ReporteAceptado, ReportePublico, RespuestaConsulta, Transicion, Zona, Antena, EstadoAntena, Reporte, Operador } from './types';
 
 type Fetch = typeof fetch;
 
@@ -13,11 +13,20 @@ export function consulta(params: Record<string, string | number | null | undefin
   return s ? `?${s}` : '';
 }
 
-export function crearApi(
-  apiUrl: string,
-  obtenerToken: () => string | null,
-  fetchImpl: Fetch = (...a) => fetch(...a),
-): Api {
+/** Cliente de la API pública (sin token): reportar una falla y consultar reportes. */
+export function crearApiPublica(apiUrl: string, fetchImpl: Fetch = (...a) => fetch(...a)): ApiPublica {
+  const pedir = crearPedir(apiUrl, () => null, fetchImpl);
+  return {
+    reportarFalla: (r: ReportePublico) => pedir<ReporteAceptado>('POST', '/reportes', r),
+    consultarReportes: (documento: string, numeroServicio: string) =>
+      pedir<RespuestaConsulta>('POST', '/reportes/consulta', { documento, numeroServicio }).then((r) => ({
+        ...r,
+        reportes: r?.reportes ?? [],
+      })),
+  };
+}
+
+function crearPedir(apiUrl: string, obtenerToken: () => string | null, fetchImpl: Fetch) {
   const base = apiUrl.replace(/\/+$/, '');
 
   async function pedir<T>(metodo: string, ruta: string, cuerpo?: unknown): Promise<T> {
@@ -50,14 +59,22 @@ export function crearApi(
         resp.status,
         e.codigo ?? `HTTP_${resp.status}`,
         e.mensaje ?? e.message ?? `Error ${resp.status}`,
+        (datos && typeof datos === 'object' ? datos : {}) as Record<string, unknown>,
       );
     }
     return datos as T;
   }
+  return pedir;
+}
 
+export function crearApi(
+  apiUrl: string,
+  obtenerToken: () => string | null,
+  fetchImpl: Fetch = (...a) => fetch(...a),
+): Api {
+  const pedir = crearPedir(apiUrl, obtenerToken, fetchImpl);
   const id = encodeURIComponent;
   return {
-    crearReporte: (r: NuevoReporte) => pedir('POST', '/incidencias', r),
     listarIncidencias: (f: FiltrosIncidencias = {}) =>
       pedir<Pagina>(
         'GET',

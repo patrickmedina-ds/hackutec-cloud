@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cerrarSesion, completarCallback, crearCuenta, iniciarSesion, leerSesion } from './auth';
 import type { Sesion } from './auth';
-import { crearApi } from './api';
+import { crearApi, crearApiPublica } from './api';
 import { esModoDemo } from './config';
 import { EMAIL_DEMO, crearDemo } from './demo';
-import { MisReportes } from './MisReportes';
-import { NuevoReporteVista } from './NuevoReporte';
 import { OperadorVista } from './Operador';
-import type { Config, Rol } from './types';
+import { crearDemoPublica } from './publico';
+import { ConsultarReportes, ReportarFalla } from './PortalClientes';
+import type { Config } from './types';
 import { Aviso } from './ui';
 
-type Vista = 'panel' | 'nuevo' | 'mis';
+type VistaPublica = 'reportar' | 'consultar';
+type ModoDemo = 'publico' | 'operador';
 
 function useTema() {
   const [tema, setTema] = useState<'claro' | 'oscuro' | 'auto'>(() => {
@@ -40,9 +41,9 @@ export function App({ cfg }: { cfg: Config }) {
   const [sesion, setSesion] = useState<Sesion | null>(() => (demo ? null : leerSesion()));
   const [cargandoAuth, setCargandoAuth] = useState(!demo);
   const [errAuth, setErrAuth] = useState('');
-  const [rolDemo, setRolDemo] = useState<Rol>('operador');
-  const [vista, setVista] = useState<Vista | null>(null);
-  const [version, setVersion] = useState(0);
+  const [modoDemo, setModoDemo] = useState<ModoDemo>('publico');
+  const [vistaPublica, setVistaPublica] = useState<VistaPublica>('reportar');
+  const [acceso, setAcceso] = useState(false); // pantalla "Acceso operadores"
   const sesionRef = useRef<Sesion | null>(sesion);
   sesionRef.current = sesion;
 
@@ -50,7 +51,7 @@ export function App({ cfg }: { cfg: Config }) {
     if (demo) return;
     completarCallback(cfg)
       .then((s) => s && setSesion(s))
-      .catch((e) => setErrAuth(e.message))
+      .catch((e) => { setErrAuth(e.message); setAcceso(true); })
       .finally(() => setCargandoAuth(false));
   }, [cfg, demo]);
 
@@ -58,11 +59,11 @@ export function App({ cfg }: { cfg: Config }) {
     () => (demo ? crearDemo('operador') : crearApi(cfg.apiUrl, () => sesionRef.current?.idToken ?? null)),
     [cfg, demo],
   );
+  const apiPublica = useMemo(() => (demo ? crearDemoPublica() : crearApiPublica(cfg.apiUrl)), [cfg, demo]);
 
-  const rol: Rol | null = demo ? rolDemo : sesion?.rol ?? null;
-  const vistaActual: Vista = vista ?? (rol === 'operador' ? 'panel' : 'nuevo');
+  const esOperador = demo ? modoDemo === 'operador' : sesion?.rol === 'operador';
 
-  // Token vencido: volver a la pantalla de ingreso
+  // Token vencido: volver a la página pública
   useEffect(() => {
     if (demo || !sesion) return;
     const ms = sesion.exp * 1000 - Date.now();
@@ -78,10 +79,10 @@ export function App({ cfg }: { cfg: Config }) {
       </div>
       <div className="cab-acc">
         {demo && (
-          <label className="sel-rol">Rol
-            <select value={rolDemo} onChange={(e) => { const r = e.target.value as Rol; setRolDemo(r); api.setRolDemo?.(r); setVista(null); setVersion((v) => v + 1); }}>
+          <label className="sel-rol">Vista
+            <select value={modoDemo} onChange={(e) => setModoDemo(e.target.value as ModoDemo)}>
+              <option value="publico">Cliente (público)</option>
               <option value="operador">Operador</option>
-              <option value="usuario">Usuario</option>
             </select>
           </label>
         )}
@@ -94,51 +95,70 @@ export function App({ cfg }: { cfg: Config }) {
             <button className="btn btn-sec" onClick={() => cerrarSesion(cfg)}>Salir</button>
           </>
         )}
+        {!demo && !sesion && !cargandoAuth && (
+          acceso
+            ? <button className="btn btn-sec" onClick={() => setAcceso(false)}>Volver al portal de clientes</button>
+            : <button className="btn btn-sec" onClick={() => setAcceso(true)}>Acceso operadores</button>
+        )}
       </div>
     </header>
   );
 
   const bandaDemo = demo && (
     <div className="banda-demo" role="note">
-      <strong>MODO DEMOSTRACIÓN</strong> · Datos de ejemplo en memoria, no hay conexión con la red real. Los cambios se pierden al recargar.
+      <strong>MODO DEMOSTRACIÓN</strong> · Datos de ejemplo en memoria. Clientes de prueba: DNI 70000001 (un servicio),
+      70000002 (dos servicios), 70000004 (suspendido); para consultar usa DNI 70000001 y SRV-00000001.
     </div>
+  );
+
+  const paginaPublica = (
+    <>
+      <nav className="tabs" aria-label="Secciones">
+        {([['reportar', 'Reportar falla'], ['consultar', 'Consultar mis reportes']] as [VistaPublica, string][]).map(([v, t]) => (
+          <button key={v} className="tab" aria-current={vistaPublica === v ? 'page' : undefined} onClick={() => setVistaPublica(v)}>{t}</button>
+        ))}
+      </nav>
+      {vistaPublica === 'reportar' ? <ReportarFalla api={apiPublica} /> : <ConsultarReportes api={apiPublica} />}
+    </>
   );
 
   let cuerpo: React.ReactNode;
   if (!demo && cargandoAuth) {
-    cuerpo = <p className="centro muted">Verificando sesión…</p>;
-  } else if (!demo && !sesion) {
+    cuerpo = <p className="centro muted">Cargando…</p>;
+  } else if (esOperador) {
+    cuerpo = (
+      <>
+        <nav className="tabs" aria-label="Secciones">
+          <button className="tab" aria-current="page">Panel de operación</button>
+        </nav>
+        <OperadorVista api={api} miEmail={demo ? EMAIL_DEMO : sesion?.email} />
+      </>
+    );
+  } else if (!demo && !sesion && acceso) {
     const incompleta = !cfg.cognitoDomain || !cfg.clientId || !cfg.redirectUri;
     cuerpo = (
       <section className="panel ingreso">
-        <h1>Bienvenido</h1>
-        <p>Inicia sesión para reportar un problema de tu servicio o, si eres operador, gestionar incidencias.</p>
+        <h1>Acceso operadores</h1>
+        <p>Ingreso exclusivo para el personal de Red TeleCorp. Los clientes no necesitan cuenta para reportar una falla.</p>
         {errAuth && <Aviso tipo="error">{errAuth}</Aviso>}
         {incompleta && <Aviso tipo="error">Falta configuración de Cognito en config.json.</Aviso>}
         <div className="fila acciones-ingreso">
           <button className="btn" disabled={incompleta} onClick={() => iniciarSesion(cfg)}>Iniciar sesión</button>
+        </div>
+        <p className="muted">Personal de Red TeleCorp: crea tu cuenta y pide acceso a un operador.</p>
+        <div className="fila acciones-ingreso">
           <button className="btn btn-sec" disabled={incompleta} onClick={() => crearCuenta(cfg)}>Crear cuenta</button>
         </div>
-        <p className="muted">Los clientes crean su cuenta aquí. Un operador existente puede darte acceso de operador.</p>
         <p className="muted">¿Solo quieres ver cómo funciona? Abre la <a href="?demo=1">demostración con datos de ejemplo</a>.</p>
       </section>
     );
   } else {
-    const tabs: [Vista, string][] = [
-      ...(rol === 'operador' ? ([['panel', 'Panel de operación']] as [Vista, string][]) : []),
-      ['nuevo', 'Nuevo reporte'],
-      ['mis', 'Mis reportes'],
-    ];
     cuerpo = (
       <>
-        <nav className="tabs" aria-label="Secciones">
-          {tabs.map(([v, t]) => (
-            <button key={v} className="tab" aria-current={vistaActual === v ? 'page' : undefined} onClick={() => setVista(v)}>{t}</button>
-          ))}
-        </nav>
-        {vistaActual === 'panel' && rol === 'operador' && <OperadorVista key={`${rolDemo}-${version}`} api={api} miEmail={demo ? EMAIL_DEMO : sesion?.email} />}
-        {vistaActual === 'nuevo' && <NuevoReporteVista api={api} onCreado={() => setVersion((v) => v + 1)} />}
-        {vistaActual === 'mis' && <MisReportes api={api} version={version} />}
+        {!demo && sesion && (
+          <Aviso tipo="info">Tu cuenta aún no tiene acceso de operador. Pide a un operador que te lo dé desde la pestaña Equipo.</Aviso>
+        )}
+        {paginaPublica}
       </>
     );
   }

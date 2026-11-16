@@ -38,6 +38,7 @@ Prefijo: `telecorp-${Stage}-`. `Stage` por defecto: `dev`. Los nombres son deter
 | Tabla zonas | `telecorp-${Stage}-zonas` |
 | Tabla antenas | `telecorp-${Stage}-antenas` |
 | Tabla métricas | `telecorp-${Stage}-metricas-antena` |
+| Tabla clientes (contratos) | `telecorp-${Stage}-clientes` |
 | Bus EventBridge | `telecorp-${Stage}-eventos` |
 | Cola SQS / DLQ | `telecorp-${Stage}-reportes` / `telecorp-${Stage}-reportes-dlq` |
 | Kinesis | `telecorp-${Stage}-telemetria` |
@@ -52,7 +53,7 @@ Prefijo: `telecorp-${Stage}-`. `Stage` por defecto: `dev`. Los nombres son deter
 |---|---|
 | `STAGE` | `dev` |
 | `BUS_EVENTOS` | nombre del bus |
-| `TABLA_INCIDENCIAS`, `TABLA_HISTORIAL`, `TABLA_ZONA_VENTANA`, `TABLA_ZONAS`, `TABLA_ANTENAS`, `TABLA_METRICAS` | nombres de las tablas |
+| `TABLA_INCIDENCIAS`, `TABLA_HISTORIAL`, `TABLA_ZONA_VENTANA`, `TABLA_ZONAS`, `TABLA_ANTENAS`, `TABLA_METRICAS`, `TABLA_CLIENTES` | nombres de las tablas |
 | `POWERTOOLS_SERVICE_NAME` | nombre de la función |
 
 `telecorp_comun.nombres` lee estas variables y, si faltan, arma el nombre por convención.
@@ -119,3 +120,10 @@ La cuenta de AWS es un **Learner Lab** (rol `voclabs`). Restricciones verificada
 | Bedrock denegado | La IA usa **Azure OpenAI** (`gpt-4.1-mini`, despliegue GlobalStandard en `westus`). |
 | Federación saliente de IAM deshabilitada | AWS → Azure con **Cognito Identity Pool** (identidades de desarrollador, emisor `cognito-identity.amazonaws.com`) + credencial federada de Entra ID. Sin llaves guardadas. |
 | SES y SNS SMS denegados | La SFN `ciclo-vida` publica `Notificacion.Solicitada` y **Azure Communication Services** envía el correo (y el SMS si hay número comprado). |
+
+## Cambio de negocio: reporte público solo para clientes con contrato
+
+- Reportar una falla es **público** (sin login), pero solo para personas con un contrato en `telecorp-<stage>-clientes`, identificadas por DNI o número de servicio (`POST /reportes`, `POST /reportes/consulta`, Lambda `api-publica`).
+- Cognito queda solo para el personal: operadores (panel) y personal que pide acceso.
+- `POST /incidencias` autenticado se mantiene por compatibilidad, pero ahora pasa por `api-publica` con la misma validación de contrato (antes iba directo a SQS sin validar). El portal ya no lo usa.
+- `usuarioId` de los reportes es `cliente:<numeroServicio>`: el umbral colectivo cuenta servicios distintos.

@@ -97,3 +97,42 @@ def test_usuarios_estimados_son_enteros_positivos(zonas):
     for zona in zonas:
         assert isinstance(zona["usuariosEstimados"], int)
         assert zona["usuariosEstimados"] > 0
+
+
+CLIENTES_PATH = RAIZ / "datos" / "clientes.json"
+CAMPOS_CLIENTE = {
+    "numeroServicio", "documento", "nombre", "telefono", "email", "zonaId", "plan", "estadoContrato", "creadoEn",
+}
+
+
+@pytest.fixture(scope="module")
+def clientes():
+    return json.loads(CLIENTES_PATH.read_text(encoding="utf-8"))
+
+
+def test_clientes_con_formato(clientes, zonas):
+    zona_ids = {z["zonaId"] for z in zonas}
+    servicios = [c["numeroServicio"] for c in clientes]
+    assert len(servicios) == len(set(servicios))
+    for c in clientes:
+        assert set(c) == CAMPOS_CLIENTE, c["numeroServicio"]
+        assert re.fullmatch(r"SRV-\d{8}", c["numeroServicio"])
+        assert re.fullmatch(r"\d{8}", c["documento"])
+        assert re.fullmatch(r"\+519\d{8}", c["telefono"])
+        assert c["email"].endswith("@example.com")
+        assert c["zonaId"] in zona_ids
+        assert c["estadoContrato"] in {"ACTIVO", "SUSPENDIDO"}
+
+
+def test_cada_zona_tiene_al_menos_15_clientes_activos(clientes, zonas):
+    for zona in zonas:
+        activos = [c for c in clientes if c["zonaId"] == zona["zonaId"] and c["estadoContrato"] == "ACTIVO"]
+        assert len(activos) >= 15, zona["zonaId"]
+    assert any(c["estadoContrato"] == "SUSPENDIDO" for c in clientes)
+
+
+def test_cliente_demo(clientes):
+    demo = next(c for c in clientes if c["numeroServicio"] == "SRV-00000001")
+    assert demo["documento"] == "70000001" and demo["zonaId"] == "LIM-JMA-01"
+    assert demo["estadoContrato"] == "ACTIVO"
+    assert sum(1 for c in clientes if c["documento"] == "70000001") == 1

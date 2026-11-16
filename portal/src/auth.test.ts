@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { rolDesdeGrupos, sesionDesdeIdToken, sesionVigente } from './auth';
-import { aReporte, validar } from './validacion';
 import { crearDemo } from './demo';
 import { ApiError } from './types';
 
@@ -24,24 +23,6 @@ describe('sesión y roles', () => {
     expect(sesionVigente(s, 500_000)).toBe(true);
     expect(sesionVigente(s, 1_000_000)).toBe(false);
     expect(sesionVigente(null)).toBe(false);
-  });
-});
-
-describe('validación del formulario', () => {
-  const ok = { documento: '12345678', numeroServicio: '987654321', telefono: '', email: '', zonaId: 'LIM-MIR', fechaHoraLocal: '2026-11-15T10:00', tipo: 'LENTITUD' as const, descripcion: 'lento' };
-  const ahora = new Date('2026-11-15T20:00:00');
-  it('acepta un formulario válido y arma NuevoReporte', () => {
-    expect(validar(ok, ahora)).toEqual({});
-    const r = aReporte(ok);
-    expect(r.fechaHoraEvento).toMatch(/Z$/);
-    expect(r.telefono).toBeUndefined();
-  });
-  it('marca errores', () => {
-    const e = validar({ ...ok, documento: '123', telefono: '987', email: 'x', zonaId: '', tipo: '', descripcion: ' ' }, ahora);
-    expect(Object.keys(e).sort()).toEqual(['descripcion', 'documento', 'email', 'telefono', 'tipo', 'zonaId']);
-  });
-  it('rechaza fechas futuras', () => {
-    expect(validar({ ...ok, fechaHoraLocal: '2026-12-01T10:00' }, ahora).fechaHoraLocal).toBeDefined();
   });
 });
 

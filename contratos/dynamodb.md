@@ -6,7 +6,7 @@ Todas: `BillingMode: PAY_PER_REQUEST`, `PointInTimeRecoverySpecification` activa
 
 | Clave | Atributo | Tipo |
 |---|---|---|
-| PK | `incidenciaId` | S (el `requestId` de API Gateway para reportes; `COL-<ulid>` para colectivas; `REC-<ulid>` para recurrencia; `ANT-<ulid>` para proactivas) |
+| PK | `incidenciaId` | S (uuid4 generado por `api-publica` para reportes; `COL-<ulid>` para colectivas; `REC-<ulid>` para recurrencia; `ANT-<ulid>` para proactivas) |
 
 Atributos:
 
@@ -16,7 +16,7 @@ Atributos:
 | `origen` | S | `USUARIO` \| `ANTENA` \| `RECURRENCIA` |
 | `estado` | S | ver `telecorp_comun.estados.Estado` |
 | `version` | N | control optimista; lo maneja `transicionar()` |
-| `usuarioId` | S | `sub` de Cognito (solo INDIVIDUAL) |
+| `usuarioId` | S | `cliente:<numeroServicio>` en reportes públicos (solo INDIVIDUAL; antes el `sub` de Cognito) |
 | `documento`, `numeroServicio`, `telefono`, `email` | S | PII, solo INDIVIDUAL |
 | `zonaId` | S | |
 | `lat`, `lon` | N | opcional |
@@ -87,3 +87,19 @@ GSI `por-zona`: PK `zonaId`, SK `antenaId`.
 ## `metricas-antena`
 
 PK `antenaId` (S), SK `ts` (S). Atributos `gbPorMinuto`, `estado`, `zonaId`, `ttl = ts + 30 días`. Sin streams.
+
+## `clientes` (contratos de servicio)
+
+Solo quien tiene un contrato aquí puede reportar una falla (API pública `POST /reportes`). Lo carga `scripts/seed_dynamodb.py` desde `datos/clientes.json`.
+
+| Clave | Atributo | Tipo |
+|---|---|---|
+| PK | `numeroServicio` | S, formato `SRV-` + 8 dígitos |
+
+Atributos: `documento` (DNI, 8 dígitos), `nombre`, `telefono` (E.164), `email`, `zonaId`, `plan`, `estadoContrato` (`ACTIVO` \| `SUSPENDIDO`), `creadoEn`. Todo es PII salvo `zonaId`, `plan` y `estadoContrato`.
+
+GSI `por-documento`: PK `documento`, SK `numeroServicio` (proyección `ALL`). Un DNI puede tener varios servicios.
+
+Variable de entorno: `TABLA_CLIENTES` (`telecorp_comun.nombres.tabla("clientes")`). Sin streams.
+
+Cliente de demo: DNI `70000001`, servicio `SRV-00000001`, zona `LIM-JMA-01`, correo `cliente.demo@example.com` (se cambia con `--correo-demo`). Otros de demo: DNI `70000002` con dos servicios (`SRV-00000002` en LIM-JMA-01 y `SRV-00000003` en LIM-MIR-01, para ver el 409) y DNI `70000004` / `SRV-00000004` suspendido (403).

@@ -2,6 +2,8 @@
 
 SPA en Vite + React + TypeScript (sin Amplify). Consume la API de `contratos/openapi.yaml`, autentica con Cognito (código + PKCE hecho a mano) y tiene un modo demostración con datos de ejemplo.
 
+La página inicial es **pública** (sin login), con dos pestañas: **Reportar falla** (DNI o número de servicio; mensajes para 404 sin contrato, 409 varios servicios con elección del servicio y 403 suspendido) y **Consultar mis reportes** (DNI + número de servicio, con línea de tiempo). Usa `POST /reportes` y `POST /reportes/consulta` sin token (`crearApiPublica`). El botón **Acceso operadores** lleva al login de Cognito; con sesión de operador se ve el Panel de operación. "Crear cuenta" solo aparece ahí, para el personal.
+
 ## Modo demostración (pitch)
 
 ```bash
@@ -13,7 +15,7 @@ npm run dev          # http://localhost:5173/?demo=1
 - Con `apiUrl` vacío en `public/config.json` (valor por defecto del repo) el portal arranca siempre en demo.
 - Con una API real configurada, añade `?demo=1` a la URL para forzar la demo.
 - Una banda ámbar fija marca "MODO DEMOSTRACIÓN"; los datos viven en memoria y se pierden al recargar.
-- El selector **Rol** del encabezado alterna entre operador y usuario. Datos: zonas de Lima, incidencias en los 5 estados, un colectivo en San Juan de Lurigancho con 12 reportes hijos, antenas caídas (`ANT-SJL-03`, `ANT-LOL-02`), saturadas e inhabilitada. Las transiciones inválidas devuelven un 409 como la API real.
+- El selector **Vista** del encabezado alterna entre la página pública de clientes y el operador. Clientes de ejemplo: DNI `70000001` (`SRV-00000001`), `70000002` (dos servicios) y `70000004` (suspendido). Datos: zonas de Lima, incidencias en los 5 estados, un colectivo en San Juan de Lurigancho con 12 reportes hijos, antenas caídas (`ANT-SJL-03`, `ANT-LOL-02`), saturadas e inhabilitada. Las transiciones inválidas devuelven un 409 como la API real.
 
 ## Configuración en tiempo de ejecución
 
@@ -37,7 +39,7 @@ npm run build        # tsc --noEmit + vite build -> dist/
 npm run preview
 ```
 
-Estructura: `src/api.ts` (cliente), `src/demo.ts` (misma interfaz `Api` en memoria), `src/pkce.ts` + `src/auth.ts` (OIDC), `src/transiciones.ts` (réplica de `TRANSICIONES` de `telecorp_comun/estados.py`; si el backend cambia, actualizar ahí y en su prueba).
+Estructura: `src/api.ts` (cliente), `src/demo.ts` (misma interfaz `Api` en memoria), `src/publico.ts` (validación, mensajes y demo de la API pública), `src/PortalClientes.tsx` (vistas públicas), `src/pkce.ts` + `src/auth.ts` (OIDC), `src/transiciones.ts` (réplica de `TRANSICIONES` de `telecorp_comun/estados.py`; si el backend cambia, actualizar ahí y en su prueba).
 
 ## Despliegue
 

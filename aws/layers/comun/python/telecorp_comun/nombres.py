@@ -9,6 +9,7 @@ _TABLAS = {
     "zonas": "TABLA_ZONAS",
     "antenas": "TABLA_ANTENAS",
     "metricas-antena": "TABLA_METRICAS",
+    "clientes": "TABLA_CLIENTES",
 }
 
 

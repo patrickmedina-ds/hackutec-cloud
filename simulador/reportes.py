@@ -1,11 +1,14 @@
-"""Simulador de reportes de usuarios (contrato: contratos/integraciones.md sección 1 y openapi.yaml NuevoReporte).
+"""Simulador de reportes de clientes (contrato: contratos/integraciones.md sección 1 y openapi.yaml ReportePublico).
+
+Solo reportan clientes con contrato ACTIVO de `clientes.json`: zona y contacto salen del contrato y
+`usuarioId = cliente:<numeroServicio>` (igual que la Lambda api-publica).
 
 Escenarios:
   aislado    reportes dispersos entre zonas y horas.
-  masivo     muchos usuarios distintos en una misma zona (dispara el umbral colectivo).
+  masivo     N clientes distintos de una misma zona, uno por cliente (dispara el umbral colectivo).
   tormenta   ráfaga de reportes en varias zonas, enviada en lotes de 10.
 
-Destinos: sqs (SendMessageBatch a telecorp-<stage>-reportes), api (POST a /incidencias) o stdout.
+Destinos: sqs (SendMessageBatch a telecorp-<stage>-reportes), api (POST /reportes, público, sin token) o stdout.
 Ejemplo: python simulador/reportes.py --escenario masivo --zona LIM-MIR-01 --usuarios 15 --dry-run
 """
 
@@ -25,7 +28,9 @@ from comun import (
     REGION_POR_DEFECTO,
     ErrorSimulador,
     ahora_utc,
+    cargar_clientes,
     cargar_zonas,
+    clientes_activos,
     crear_cliente,
     epoch_ms,
     exigir_zona,
@@ -39,15 +44,6 @@ ESCENARIOS = ("aislado", "masivo", "tormenta")
 DESTINOS = ("sqs", "api", "stdout")
 TIPOS = ("SIN_INTERNET", "SIN_LLAMADAS", "SIN_SMS", "LENTITUD", "INTERMITENCIA", "OTRO")
 LOTE_SQS = 10  # SendMessageBatch admite 10 mensajes; también se usa como lote para la API
-
-NOMBRES = [
-    "lucia", "carlos", "maria", "jose", "ana", "luis", "rosa", "miguel", "carmen", "jorge",
-    "elena", "pedro", "sofia", "diego", "valeria", "andres", "patricia", "raul", "gabriela", "hugo",
-]
-APELLIDOS = [
-    "quispe", "mamani", "flores", "huaman", "rojas", "vargas", "torres", "castillo",
-    "ramos", "chavez", "gutierrez", "sanchez", "rivera", "condori", "lopez", "ccahuana",
-]
 
 # Descripciones realistas en español (Perú), agrupadas por tipo de problema.
 DESCRIPCIONES = {
@@ -84,73 +80,88 @@ DESCRIPCIONES = {
 }
 
 
-def generar_usuario(rng: random.Random) -> dict:
-    """Usuario sintético con datos peruanos: DNI de 8 dígitos, celular +519 y correo @example.com."""
-    nombre = rng.choice(NOMBRES)
-    apellido = rng.choice(APELLIDOS)
-    documento = str(rng.randint(1, 9)) + "".join(rng.choice("0123456789") for _ in range(7))
+def _zona(zonas: list[dict], zona_id: str) -> dict:
+    return next((z for z in zonas if z["zonaId"] == zona_id), {"zonaId": zona_id})
+
+
+def construir_reporte(zona: dict, tipo: str, cliente: dict, instante, rng: random.Random) -> dict:
+    """Cuerpo `reporte` de integraciones.md §1 con los datos del contrato del cliente."""
+    reporte = {
+        "documento": cliente["documento"],
+        "numeroServicio": cliente["numeroServicio"],
+        "telefono": cliente["telefono"],
+        "email": cliente["email"],
+        "zonaId": cliente["zonaId"],
+    }
+    if "lat" in zona and "lon" in zona:
+        reporte["lat"] = round(zona["lat"] + rng.uniform(-0.008, 0.008), 6)
+        reporte["lon"] = round(zona["lon"] + rng.uniform(-0.008, 0.008), 6)
+    reporte.update(
+        {"fechaHoraEvento": iso_z(instante), "tipo": tipo, "descripcion": rng.choice(DESCRIPCIONES[tipo])}
+    )
+    return reporte
+
+
+def cuerpo_api(item: dict) -> dict:
+    """Cuerpo de POST /reportes (ReportePublico): el cliente se identifica; la zona la pone el backend."""
+    r = item["reporte"]
     return {
-        "usuarioId": str(uuid.uuid4()),
-        "documento": documento,
-        "numeroServicio": str(rng.randint(10**8, 10**9 - 1)),
-        "telefono": f"+519{rng.randint(10**7, 10**8 - 1)}",
-        "email": f"{nombre}.{apellido}{rng.randint(10, 99)}@example.com",
+        "documento": r["documento"],
+        "numeroServicio": r["numeroServicio"],
+        "tipo": r["tipo"],
+        "descripcion": r["descripcion"],
+        "fechaHoraEvento": r["fechaHoraEvento"],
     }
 
 
-def construir_reporte(zona: dict, tipo: str, usuario: dict, instante, rng: random.Random) -> dict:
-    """Cuerpo NuevoReporte (openapi.yaml), con las claves en el orden del contrato."""
+def _item(zonas: list[dict], tipo: str, cliente: dict, instante, rng: random.Random) -> dict:
     return {
-        "documento": usuario["documento"],
-        "numeroServicio": usuario["numeroServicio"],
-        "telefono": usuario["telefono"],
-        "email": usuario["email"],
-        "zonaId": zona["zonaId"],
-        "lat": round(zona["lat"] + rng.uniform(-0.008, 0.008), 6),
-        "lon": round(zona["lon"] + rng.uniform(-0.008, 0.008), 6),
-        "fechaHoraEvento": iso_z(instante),
-        "tipo": tipo,
-        "descripcion": rng.choice(DESCRIPCIONES[tipo]),
-    }
-
-
-def _item(zona: dict, tipo: str, usuario: dict, instante, rng: random.Random) -> dict:
-    return {
-        "usuarioId": usuario["usuarioId"],
+        "usuarioId": f"cliente:{cliente['numeroServicio']}",
         "incidenciaId": str(uuid.uuid4()),
-        "reporte": construir_reporte(zona, tipo, usuario, instante, rng),
+        "reporte": construir_reporte(_zona(zonas, cliente["zonaId"]), tipo, cliente, instante, rng),
     }
 
 
-def plan_aislado(zonas: list[dict], cantidad: int, rng: random.Random, ahora) -> list[dict]:
-    """Reportes dispersos: zona, tipo y hora al azar dentro de las últimas dos horas."""
-    items = []
-    for _ in range(cantidad):
-        zona = rng.choice(zonas)
-        tipo = rng.choice(TIPOS)
-        instante = ahora - timedelta(seconds=rng.uniform(0, 2 * 3600))
-        items.append(_item(zona, tipo, generar_usuario(rng), instante, rng))
-    return items
+def _exigir_activos(clientes: list[dict]) -> list[dict]:
+    activos = clientes_activos(clientes)
+    if not activos:
+        raise ErrorSimulador("no hay clientes con contrato ACTIVO en clientes.json")
+    return activos
 
 
-def plan_masivo(zona: dict, usuarios: int, minutos: int, tipo: str, rng: random.Random, ahora) -> list[dict]:
-    """Un reporte por usuario distinto en la misma zona, repartidos en la ventana de `minutos`."""
-    items = []
-    for _ in range(usuarios):
-        instante = ahora - timedelta(seconds=rng.uniform(0, minutos * 60))
-        items.append(_item(zona, tipo, generar_usuario(rng), instante, rng))
+def plan_aislado(zonas: list[dict], clientes: list[dict], cantidad: int, rng: random.Random, ahora) -> list[dict]:
+    """Reportes dispersos: cliente activo, tipo y hora al azar dentro de las últimas dos horas."""
+    activos = _exigir_activos(clientes)
+    return [
+        _item(zonas, rng.choice(TIPOS), rng.choice(activos), ahora - timedelta(seconds=rng.uniform(0, 2 * 3600)), rng)
+        for _ in range(cantidad)
+    ]
+
+
+def plan_masivo(
+    zona: dict, clientes: list[dict], usuarios: int, minutos: int, tipo: str, rng: random.Random, ahora
+) -> list[dict]:
+    """Un reporte por cliente ACTIVO distinto de la zona, repartidos en la ventana de `minutos`."""
+    activos = clientes_activos(clientes, zona["zonaId"])
+    if len(activos) < usuarios:
+        raise ErrorSimulador(
+            f"la zona {zona['zonaId']} solo tiene {len(activos)} clientes con contrato ACTIVO "
+            f"y se pidieron {usuarios}; usa --usuarios {len(activos)} o menos"
+        )
+    items = [
+        _item([zona], tipo, cliente, ahora - timedelta(seconds=rng.uniform(0, minutos * 60)), rng)
+        for cliente in rng.sample(activos, usuarios)
+    ]
     return sorted(items, key=lambda it: it["reporte"]["fechaHoraEvento"])
 
 
-def plan_tormenta(zonas: list[dict], cantidad: int, rng: random.Random, ahora) -> list[dict]:
-    """Ráfaga: cada reporte en una zona al azar, con usuario nuevo, en los últimos dos minutos."""
-    items = []
-    for _ in range(cantidad):
-        zona = rng.choice(zonas)
-        tipo = rng.choice(TIPOS)
-        instante = ahora - timedelta(seconds=rng.uniform(0, 120))
-        items.append(_item(zona, tipo, generar_usuario(rng), instante, rng))
-    return items
+def plan_tormenta(zonas: list[dict], clientes: list[dict], cantidad: int, rng: random.Random, ahora) -> list[dict]:
+    """Ráfaga: cada reporte de un cliente activo al azar, en los últimos dos minutos."""
+    activos = _exigir_activos(clientes)
+    return [
+        _item(zonas, rng.choice(TIPOS), rng.choice(activos), ahora - timedelta(seconds=rng.uniform(0, 120)), rng)
+        for _ in range(cantidad)
+    ]
 
 
 def cuerpo_sqs(item: dict, recibido_en_ms: int | None = None) -> dict:
@@ -184,23 +195,27 @@ def enviar_sqs(items: list[dict], cola_url: str, cliente) -> int:
     return enviados
 
 
-def enviar_api(items: list[dict], api_url: str, token: str) -> int:
-    """POST de cada NuevoReporte a la API. Se espera 202 Accepted."""
+def url_reportes(api_url: str) -> str:
+    """Acepta la URL base de la API o la ruta completa de /reportes."""
+    base = api_url.rstrip("/")
+    return base if base.endswith("/reportes") else f"{base}/reportes"
+
+
+def enviar_api(items: list[dict], api_url: str) -> int:
+    """POST /reportes (público, sin token) por cada reporte. Se espera 202 Accepted."""
     enviados = 0
+    destino = url_reportes(api_url)
     for it in items:
-        datos = json.dumps(it["reporte"], ensure_ascii=False).encode("utf-8")
+        datos = json.dumps(cuerpo_api(it), ensure_ascii=False).encode("utf-8")
         peticion = urllib.request.Request(
-            api_url,
-            data=datos,
-            method="POST",
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+            destino, data=datos, method="POST", headers={"Content-Type": "application/json"}
         )
         try:
             with urllib.request.urlopen(peticion, timeout=10) as respuesta:
                 if respuesta.status != 202:
                     raise ErrorSimulador(f"la API respondió {respuesta.status}, se esperaba 202")
         except urllib.error.HTTPError as e:
-            raise ErrorSimulador(f"la API respondió {e.code}: {e.reason}") from e
+            raise ErrorSimulador(f"la API respondió {e.code}: {e.read().decode('utf-8', 'replace')}") from e
         enviados += 1
     return enviados
 
@@ -212,7 +227,6 @@ def enviar_reportes(
     stage: str,
     region: str,
     api_url: str | None = None,
-    token: str | None = None,
     dry_run: bool = False,
     cliente=None,
 ) -> int:
@@ -236,14 +250,14 @@ def enviar_reportes(
         return enviar_sqs(items, cola_url, cliente)
 
     if destino == "api":
-        if not api_url or not token:
-            raise ErrorSimulador("el destino api requiere --api-url y --token")
+        if not api_url:
+            raise ErrorSimulador("el destino api requiere --api-url")
         if dry_run:
-            print(f"[dry-run] POST {len(items)} reportes a {api_url} en {lotes} lotes", file=sys.stderr)
+            print(f"[dry-run] POST {len(items)} reportes a {url_reportes(api_url)}", file=sys.stderr)
             if items:
-                print(f"[dry-run] primer cuerpo: {json.dumps(items[0]['reporte'], ensure_ascii=False)}", file=sys.stderr)
+                print(f"[dry-run] primer cuerpo: {json.dumps(cuerpo_api(items[0]), ensure_ascii=False)}", file=sys.stderr)
             return len(items)
-        return enviar_api(items, api_url, token)
+        return enviar_api(items, api_url)
 
     raise ErrorSimulador(f"destino desconocido: {destino}")
 
@@ -252,49 +266,49 @@ def construir_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Simulador de reportes de usuarios de Red TeleCorp.")
     parser.add_argument("--escenario", choices=ESCENARIOS, default="aislado", help="Escenario a simular.")
     parser.add_argument("--zona", help="zonaId de la zona afectada (obligatorio en masivo).")
-    parser.add_argument("--usuarios", type=int, default=15, help="Usuarios distintos (masivo).")
+    parser.add_argument("--usuarios", type=int, default=15, help="Clientes distintos de la zona (masivo).")
     parser.add_argument("--minutos", type=int, default=10, help="Ventana de tiempo de los eventos (masivo).")
     parser.add_argument("--tipo", choices=TIPOS, default="SIN_INTERNET", help="Tipo de problema (masivo).")
     parser.add_argument("--reportes", type=int, help="Cantidad de reportes (aislado: 5; tormenta: 2000).")
     parser.add_argument("--destino", choices=DESTINOS, default="stdout", help="Destino de los reportes.")
-    parser.add_argument("--api-url", help="URL del POST /incidencias (destino api).")
-    parser.add_argument("--token", help="Token Bearer de Cognito (destino api).")
+    parser.add_argument("--api-url", help="URL base de la API (destino api); se usa POST <url>/reportes sin token.")
     parser.add_argument("--stage", default=stage_por_defecto(), help="Stage de despliegue (por defecto STAGE o dev).")
     parser.add_argument("--region", default=os.environ.get("AWS_REGION", REGION_POR_DEFECTO), help="Región AWS.")
-    parser.add_argument("--datos", help="Carpeta con zonas.json (por defecto datos/ o datos_ejemplo/).")
+    parser.add_argument("--datos", help="Carpeta con zonas.json y clientes.json (por defecto datos/ o datos_ejemplo/).")
     parser.add_argument("--semilla", type=int, help="Semilla del generador aleatorio.")
     parser.add_argument("--dry-run", action="store_true", help="Muestra lo que enviaría sin llamar a la nube.")
     return parser
 
 
-def _construir_plan(args: argparse.Namespace, zonas: list[dict], rng: random.Random) -> list[dict]:
+def _construir_plan(args: argparse.Namespace, zonas: list[dict], clientes: list[dict], rng: random.Random) -> list[dict]:
     ahora = ahora_utc()
     if args.escenario == "aislado":
-        return plan_aislado(zonas, args.reportes or 5, rng, ahora)
+        return plan_aislado(zonas, clientes, args.reportes or 5, rng, ahora)
     if args.escenario == "masivo":
         if not args.zona:
             raise ErrorSimulador("el escenario masivo requiere --zona")
         if args.usuarios < 1 or args.minutos < 1:
             raise ErrorSimulador("--usuarios y --minutos deben ser mayores que cero")
         zona = exigir_zona(zonas, args.zona)
-        return plan_masivo(zona, args.usuarios, args.minutos, args.tipo, rng, ahora)
+        return plan_masivo(zona, clientes, args.usuarios, args.minutos, args.tipo, rng, ahora)
     if args.escenario == "tormenta":
         cantidad = args.reportes or 2000
         if cantidad < 1:
             raise ErrorSimulador("--reportes debe ser mayor que cero")
-        return plan_tormenta(zonas, cantidad, rng, ahora)
+        return plan_tormenta(zonas, clientes, cantidad, rng, ahora)
     raise ErrorSimulador(f"escenario desconocido: {args.escenario}")
 
 
 def _ejecutar(args: argparse.Namespace) -> int:
     datos = ruta_datos(args.datos)
     zonas = cargar_zonas(datos)
+    clientes = cargar_clientes(datos)
     rng = random.Random(args.semilla)
 
-    items = _construir_plan(args, zonas, rng)
+    items = _construir_plan(args, zonas, clientes, rng)
     if args.escenario == "masivo":
         distintos = len({it["usuarioId"] for it in items})
-        print(f"Masivo: {distintos} usuarios distintos en {args.zona} (umbral colectivo: 10)", file=sys.stderr)
+        print(f"Masivo: {distintos} clientes distintos en {args.zona} (umbral colectivo: 10)", file=sys.stderr)
 
     modo = " (dry-run)" if args.dry_run else ""
     print(f"Escenario {args.escenario} · {len(items)} reportes · destino {args.destino}{modo}", file=sys.stderr)
@@ -304,7 +318,6 @@ def _ejecutar(args: argparse.Namespace) -> int:
         stage=args.stage,
         region=args.region,
         api_url=args.api_url,
-        token=args.token,
         dry_run=args.dry_run,
     )
     print(f"Listo: {enviados} reportes {'simulados' if args.dry_run else 'enviados'}", file=sys.stderr)

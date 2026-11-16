@@ -51,6 +51,25 @@ def dynamodb():
             ],
             BillingMode="PAY_PER_REQUEST",
         )
+        recurso.create_table(
+            TableName=f"telecorp-{STAGE}-clientes",
+            KeySchema=[{"AttributeName": "numeroServicio", "KeyType": "HASH"}],
+            AttributeDefinitions=[
+                {"AttributeName": "numeroServicio", "AttributeType": "S"},
+                {"AttributeName": "documento", "AttributeType": "S"},
+            ],
+            GlobalSecondaryIndexes=[
+                {
+                    "IndexName": "por-documento",
+                    "KeySchema": [
+                        {"AttributeName": "documento", "KeyType": "HASH"},
+                        {"AttributeName": "numeroServicio", "KeyType": "RANGE"},
+                    ],
+                    "Projection": {"ProjectionType": "ALL"},
+                }
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
         yield recurso
 
 
@@ -115,3 +134,35 @@ def test_cli_devuelve_1_si_la_tabla_no_existe(dynamodb, capsys):
 
     assert codigo == 1
     assert "Error al sembrar" in capsys.readouterr().err
+
+
+def test_siembra_clientes_y_correo_demo(dynamodb):
+    clientes = len(seed_dynamodb.cargar_json(DATOS / "clientes.json"))
+    resumen = seed_dynamodb.sembrar(dynamodb, STAGE, DATOS, correo_demo="yo@correo.pe")
+    assert resumen["clientesEscritos"] == clientes == _contar(dynamodb, "clientes")
+    tabla = dynamodb.Table(f"telecorp-{STAGE}-clientes")
+    demo = tabla.get_item(Key={"numeroServicio": "SRV-00000001"})["Item"]
+    assert demo["email"] == "yo@correo.pe"
+    assert demo["documento"] == "70000001" and demo["zonaId"] == "LIM-JMA-01"
+
+
+def test_clientes_idempotente_y_conserva_correo_demo(dynamodb):
+    seed_dynamodb.sembrar(dynamodb, STAGE, DATOS, correo_demo="yo@correo.pe")
+    seed_dynamodb.sembrar(dynamodb, STAGE, DATOS)
+    assert _contar(dynamodb, "clientes") == len(seed_dynamodb.cargar_json(DATOS / "clientes.json"))
+    demo = dynamodb.Table(f"telecorp-{STAGE}-clientes").get_item(Key={"numeroServicio": "SRV-00000001"})["Item"]
+    assert demo["email"] == "yo@correo.pe"
+
+
+def test_cli_acepta_correo_demo(dynamodb, capsys):
+    codigo = seed_dynamodb.main(
+        ["--stage", STAGE, "--region", REGION, "--datos", str(DATOS), "--correo-demo", "yo@correo.pe"]
+    )
+    assert codigo == 0
+    assert "yo@correo.pe" in capsys.readouterr().out
+
+
+def test_cli_correo_demo_por_defecto(dynamodb):
+    assert seed_dynamodb.main(["--stage", STAGE, "--region", REGION, "--datos", str(DATOS)]) == 0
+    demo = dynamodb.Table(f"telecorp-{STAGE}-clientes").get_item(Key={"numeroServicio": "SRV-00000001"})["Item"]
+    assert demo["email"] == "cliente.demo@example.com"
