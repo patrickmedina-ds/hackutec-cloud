@@ -177,7 +177,7 @@ def test_html_del_correo():
     assert "Servicio restablecido" in construir_html("a", "m", "i", "SOLUCIONADA")
 
 
-def test_acs_correo_incluye_html_y_texto(monkeypatch):
+def test_acs_correo_va_en_texto_plano(monkeypatch):
     import sys, types
     enviados = []
 
@@ -199,7 +199,8 @@ def test_acs_correo_incluye_html_y_texto(monkeypatch):
     assert n.sms_habilitado is False
     n.enviar("EMAIL", "a@b.c", "Asunto", "Hola", incidencia_id="inc-1", estado="ATENDIDA")
     c = enviados[0]["content"]
-    assert c["plainText"] == "Hola" and "Incidencia identificada" in c["html"]
+    assert c["plainText"].startswith("Hola") and "Incidencia identificada" in c["plainText"]
+    assert "inc-1" in c["plainText"] and "html" not in c
     assert enviados[0]["senderAddress"] == "no-responder@x.azurecomm.net"
 
 

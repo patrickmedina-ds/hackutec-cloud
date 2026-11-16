@@ -17,6 +17,19 @@ def estado_legible(estado: str | None) -> str:
     return ESTADOS_LEGIBLES.get(estado or "", estado or "")
 
 
+def construir_texto(mensaje: str, incidencia_id: str | None = None,
+                    estado: str | None = None) -> str:
+    """Cuerpo en texto plano. Gmail no entrega correos HTML desde el dominio
+    administrado de Azure (azurecomm.net); el texto plano sí llega."""
+    lineas = [mensaje, ""]
+    if estado:
+        lineas.append(f"Estado: {estado_legible(estado)}")
+    if incidencia_id:
+        lineas.append(f"Incidencia: {incidencia_id}")
+    lineas += ["", "Aviso automático de Red TeleCorp."]
+    return "\n".join(lineas)
+
+
 def construir_html(asunto: str, mensaje: str, incidencia_id: str | None = None,
                    estado: str | None = None) -> str:
     """Correo HTML sencillo (estilos en línea, sin recursos externos)."""
@@ -80,8 +93,8 @@ class NotificadorACS:
         poller = self._cliente(EmailClient).begin_send({
             "senderAddress": self._remitente_correo,
             "recipients": {"to": [{"address": destino}]},
-            "content": {"subject": asunto, "plainText": mensaje,
-                        "html": construir_html(asunto, mensaje, incidencia_id, estado)},
+            "content": {"subject": asunto,
+                        "plainText": construir_texto(mensaje, incidencia_id, estado)},
         })
         resultado = poller.result()
         if resultado.get("status") != "Succeeded":
