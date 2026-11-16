@@ -22,17 +22,14 @@ Plataforma **100 % serverless** para que Red TeleCorp reciba, priorice y atienda
 | Portal (usuario y operador) | https://green-glacier-0a847041e.4.azurestaticapps.net/ |
 | Página de estado pública | https://victorious-river-026920e1e.5.azurestaticapps.net |
 | API REST | https://v8wh8zzm8e.execute-api.us-east-1.amazonaws.com/dev |
-| Diagrama | [arquitectura.html](arquitectura.html) |
 
-El guion del pitch y la demo en vivo están en [docs/pitch.md](docs/pitch.md).
-
-Entorno real: AWS Academy Learner Lab (todo usa `LabRole`; sin CloudFront, Bedrock, SES ni SNS SMS) y una suscripción personal de Azure. Por eso el portal se aloja en Azure Static Web Apps, la IA es Azure OpenAI y los avisos salen por Azure Communication Services.
+Entorno real: AWS Academy Learner Lab (todo usa `LabRole`; sin CloudFront, Bedrock, SES ni SNS SMS) y una suscripción de Azure. Por eso el portal se aloja en Azure Static Web Apps, la IA es Azure OpenAI y los avisos salen por Azure Communication Services.
 
 ## Arquitectura
 
 AWS recibe los reportes y la telemetría, detecta los incidentes y los orquesta con **Step Functions**. Los cambios de estado salen de DynamoDB por Streams hacia **EventBridge**, y de ahí parten la analítica en Athena y la réplica a Azure. Ningún componente escribe directamente en otro.
 
-El diagrama completo, con las rutas de datos y los eventos, está en **[arquitectura.html](arquitectura.html)**.
+El diagrama de arquitectura (draw.io) se entrega como archivo aparte.
 
 ## Qué hace cada nube
 
@@ -142,8 +139,7 @@ Por eso el costo en reposo es prácticamente cero, y el costo crece con los repo
 | Persistencia y alta disponibilidad de los datos | 0–2 | DynamoDB con PITR y cifrado, multi-AZ; Cosmos DB como réplica; todos los eventos respaldados en Azure Blob Storage GRS; histórico en S3 con Athena. |
 | Uso de Step Functions para automatización | 0–2 | Tres máquinas de estado: `ciclo-vida`, `colectivo` y `recurrencia`, con reglas de EventBridge y Scheduler. |
 | Uso de 2 nubes o más | 0–3 | AWS y Azure con responsabilidades separadas y autenticación sin llaves guardadas (federación saliente de IAM y credencial federada de Entra ID). |
-| Arquitectura de la solución | 0–3 | Diagrama en [arquitectura.html](arquitectura.html), infraestructura como código en SAM y Terraform, y una capa común compartida. |
-| Pitch de 5 minutos | 0–2 | Se presenta aparte de este repositorio. |
+| Arquitectura de la solución | 0–3 | Diagrama en draw.io (entregado aparte), infraestructura como código en SAM y Terraform, y una capa común compartida. |
 | Solución completamente serverless | 0–2 | Ningún servicio con servidores fijos: Lambda, Azure Functions, Step Functions, DynamoDB en modo on-demand y Cosmos DB serverless. |
 | Uso de IA | 0–3 | Azure OpenAI clasifica y resume, redacta avisos, con respaldo de reglas locales. |
 

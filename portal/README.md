@@ -4,7 +4,7 @@ SPA en Vite + React + TypeScript (sin Amplify). Consume la API de `contratos/ope
 
 La página inicial es **pública** (sin login), con dos pestañas: **Reportar falla** (DNI o número de servicio; mensajes para 404 sin contrato, 409 varios servicios con elección del servicio y 403 suspendido) y **Consultar mis reportes** (DNI + número de servicio, con línea de tiempo). Usa `POST /reportes` y `POST /reportes/consulta` sin token (`crearApiPublica`). El botón **Acceso operadores** lleva al login de Cognito; con sesión de operador se ve el Panel de operación. "Crear cuenta" solo aparece ahí, para el personal.
 
-## Modo demostración (pitch)
+## Modo demostración
 
 ```bash
 cd portal

@@ -1,4 +1,4 @@
-"""Guion del pitch: escenario normal, caída de una zona y 12 reportes en esa zona.
+"""Guion de demostración: escenario normal, caída de una zona y 12 reportes en esa zona.
 
 Imprime, paso a paso, qué se envía y qué debería ocurrir en la plataforma.
 Ejemplo (sin tocar la nube): python simulador/demo.py --dry-run
@@ -65,7 +65,7 @@ def _pausa(segundos: float) -> None:
 
 
 def construir_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Guion de demo para el pitch de Red TeleCorp.")
+    parser = argparse.ArgumentParser(description="Guion de demostración de Red TeleCorp.")
     parser.add_argument("--destino", choices=("stdout", "kinesis", "iot", "sqs", "api"), default="stdout",
                         help="Adónde enviar: kinesis/iot para telemetría; sqs o api (POST /reportes) para reportes.")
     parser.add_argument("--api-url", help="URL base de la API (destino api).")

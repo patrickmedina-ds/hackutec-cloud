@@ -1,6 +1,6 @@
 # Simulador de Red TeleCorp
 
-Genera telemetría de antenas y reportes de usuarios para probar la plataforma y preparar el pitch.
+Genera telemetría de antenas y reportes de usuarios para probar la plataforma y hacer demostraciones.
 Cumple los contratos de `contratos/integraciones.md` (secciones 1 y 2) y `contratos/openapi.yaml` (`ReportePublico`).
 Solo reportan **clientes con contrato ACTIVO** de `clientes.json`: zona, DNI, número de servicio y contacto salen del contrato, y `usuarioId = cliente:<numeroServicio>`.
 
@@ -10,7 +10,7 @@ Solo reportan **clientes con contrato ACTIVO** de `clientes.json`: zona, DNI, n�
 |---|---|
 | `antenas.py` | Telemetría de antenas: escenarios `normal`, `caida`, `saturacion`, `inhabilitada`, `recurrente`. |
 | `reportes.py` | Reportes de usuarios: escenarios `aislado`, `masivo`, `tormenta`. |
-| `demo.py` | Guion del pitch: normal, caída de una zona y 12 reportes en esa zona. |
+| `demo.py` | Guion de demostración: normal, caída de una zona y 12 reportes en esa zona. |
 | `comun.py` | Datos de entrada, nombres de recursos y reloj. Usa `telecorp_comun.antenas` para los umbrales. |
 | `datos_ejemplo/` | 3 zonas, 6 antenas y 54 clientes de ejemplo, usadas si no existe `datos/` en la raíz del repo. |
 | `tests/` | Pruebas pytest (moto para SQS y Kinesis). |
@@ -88,7 +88,7 @@ Destinos:
 Los clientes vienen de `clientes.json` (DNI de 8 dígitos, `SRV-` + 8 dígitos, celular `+519XXXXXXXX`,
 correo `@example.com`); el simulador solo inventa la hora, el tipo y la descripción.
 
-## Demo del pitch
+## Demostración guiada
 
 ```bash
 # Todo en consola, sin llamar a la nube
@@ -108,7 +108,7 @@ de lo que debería ocurrir en la plataforma. Los pasos son: normal, caída de la
 ## Pruebas
 
 ```bash
-cd .
+cd hackutec-cloud
 $PY -m pytest simulador/tests -q
 ```
 
