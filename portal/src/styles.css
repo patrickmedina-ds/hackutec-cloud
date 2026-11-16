@@ -193,3 +193,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .an-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; font-size: .9rem; }
 .an-lista li { border-bottom: 1px solid var(--linea); padding-bottom: .5rem; font-variant-numeric: tabular-nums; }
 @media (max-width: 520px) { .hbar li { grid-template-columns: 6rem 1fr 4ch; } }
+
+/* Equipo y registro */
+.acciones-ingreso { justify-content: center; gap: .6rem; flex-wrap: wrap; }
+.equipo-form { background: var(--superficie); border: 1px solid var(--linea); border-radius: var(--radio); padding: .9rem 1rem; margin: .75rem 0 1.25rem; max-width: 36rem; }
+.equipo-form input { flex: 1; min-width: 12rem; }
+.campo-error { color: var(--mal); margin: .35rem 0 0; }
+.confirmar { gap: .5rem; flex-wrap: wrap; align-items: center; }
+.btn-peligro { background: var(--mal); border-color: var(--mal); color: var(--fondo); }

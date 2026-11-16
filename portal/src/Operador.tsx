@@ -3,6 +3,7 @@ import { ABIERTO, ETIQUETA_ESTADO, transicionesValidas } from './transiciones';
 import { ApiError, ESTADOS, TIPOS } from './types';
 import type { Antena, Api, Clase, Estado, Incidencia, Transicion, Zona } from './types';
 import { Analitica } from './Analitica';
+import { Equipo } from './Equipo';
 import { AntenaBadge, Aviso, EstadoBadge, LineaTiempo, PrioridadChip, SeveridadChip, fmtFecha, nombreZona } from './ui';
 
 const etiquetaTipo = (t: string) => TIPOS.find((x) => x.valor === t)?.etiqueta ?? t;
@@ -306,11 +307,11 @@ function Antenas({ api, zonas, version }: { api: Api; zonas: Zona[]; version: nu
   );
 }
 
-export function OperadorVista({ api }: { api: Api }) {
+export function OperadorVista({ api, miEmail }: { api: Api; miEmail?: string }) {
   const [zonas, setZonas] = useState<Zona[]>([]);
   const [version, setVersion] = useState(0);
   const [err, setErr] = useState('');
-  const [sub, setSub] = useState<'op' | 'an'>('op');
+  const [sub, setSub] = useState<'op' | 'an' | 'eq'>('op');
   useEffect(() => { api.listarZonas().then(setZonas).catch((e) => setErr(e.message)); }, [api]);
   return (
     <>
@@ -318,7 +319,9 @@ export function OperadorVista({ api }: { api: Api }) {
       <nav className="tabs" aria-label="Secciones del panel">
         <button className="tab" aria-current={sub === 'op' ? 'page' : undefined} onClick={() => setSub('op')}>Incidencias y antenas</button>
         <button className="tab" aria-current={sub === 'an' ? 'page' : undefined} onClick={() => setSub('an')}>Analítica</button>
+        <button className="tab" aria-current={sub === 'eq' ? 'page' : undefined} onClick={() => setSub('eq')}>Equipo</button>
       </nav>
+      {sub === 'eq' && <Equipo api={api} miEmail={miEmail} />}
       {sub === 'an' && <Analitica api={api} zonas={zonas} />}
       {sub === 'op' && <>
       <div className="fila entre">

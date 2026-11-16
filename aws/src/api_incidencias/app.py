@@ -1,7 +1,8 @@
 """API de incidencias (proxy de API Gateway REST con autorizador de Cognito).
 
 Rutas (contratos/openapi.yaml): GET /incidencias, GET /incidencias/{id},
-GET /incidencias/{id}/historial, PATCH /incidencias/{id}/estado, GET /zonas, GET /antenas.
+GET /incidencias/{id}/historial, PATCH /incidencias/{id}/estado, GET /zonas, GET /antenas,
+GET/POST /operadores y DELETE /operadores/{email} (gestión del grupo `operadores`; solo operadores).
 `POST /incidencias` NO pasa por aquí: API Gateway lo envía directo a SQS.
 
 Autorización: los usuarios solo ven sus incidencias (por `sub`); el grupo `operadores` ve todo
@@ -13,8 +14,10 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 from decimal import Decimal
+from urllib.parse import unquote
 
 import boto3
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
@@ -46,6 +49,8 @@ ESTADOS_ANTENA = {"NORMAL", "CAIDA", "SATURADA", "INHABILITADA"}
 _ser = TypeSerializer()
 _des = TypeDeserializer()
 _cliente = None
+_cognito = None
+RE_EMAIL = re.compile(r"^[^@\s\"\\]+@[^@\s\"\\]+\.[^@\s\"\\]+$")
 
 CABECERAS = {
     "Content-Type": "application/json",
@@ -66,6 +71,13 @@ def cliente():
     return _cliente
 
 
+def cognito():
+    global _cognito
+    if _cognito is None:
+        _cognito = boto3.client("cognito-idp")
+    return _cognito
+
+
 # ---------- utilidades ----------
 
 def _json_default(o):
@@ -84,9 +96,13 @@ def error(status: int, codigo: str, mensaje: str) -> dict:
     return respuesta(status, {"codigo": codigo, "mensaje": mensaje})
 
 
+def _claims(event: dict) -> dict:
+    return ((event.get("requestContext") or {}).get("authorizer") or {}).get("claims") or {}
+
+
 def identidad(event: dict) -> tuple[str | None, bool]:
     """(sub, es_operador) a partir de los claims del autorizador de Cognito."""
-    claims = ((event.get("requestContext") or {}).get("authorizer") or {}).get("claims") or {}
+    claims = _claims(event)
     grupos = claims.get("cognito:groups") or []
     if isinstance(grupos, str):
         grupos = [g for g in re.split(r"[\s,\[\]]+", grupos) if g]
@@ -296,6 +312,96 @@ def listar_antenas(params: dict) -> list[dict]:
     return [_proyectar(i, CAMPOS_ANTENA) for i in items]
 
 
+# ---------- operadores (grupo de Cognito) ----------
+
+def _atributo(usuario: dict, nombre: str) -> str | None:
+    for a in usuario.get("Attributes") or usuario.get("UserAttributes") or []:
+        if a["Name"] == nombre:
+            return a["Value"]
+    return None
+
+
+def _usuario_publico(u: dict) -> dict:
+    creado = u.get("UserCreateDate")
+    salida = {
+        "email": _atributo(u, "email") or u.get("Username"),
+        "nombre": _atributo(u, "name"),
+        "creado": creado.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(creado, "strftime") else creado,
+        "estado": u.get("UserStatus"),
+    }
+    return {k: v for k, v in salida.items() if v is not None}
+
+
+def _pool() -> str:
+    pool = os.environ.get("USER_POOL_ID")
+    if not pool:
+        raise ErrorHttp(500, "CONFIGURACION", "Falta USER_POOL_ID")
+    return pool
+
+
+def _miembros() -> list[dict]:
+    paginas = cognito().get_paginator("list_users_in_group").paginate(UserPoolId=_pool(), GroupName=GRUPO_OPERADORES)
+    return [u for p in paginas for u in p["Users"]]
+
+
+def _email_valido(email) -> str:
+    if not isinstance(email, str) or len(email) > 254 or not RE_EMAIL.match(email.strip()):
+        raise ErrorHttp(400, "EMAIL_INVALIDO", "Indica un correo válido")
+    return email.strip().lower()
+
+
+def _buscar_usuario(email: str) -> dict | None:
+    r = cognito().list_users(UserPoolId=_pool(), Filter=f'email = "{email}"', Limit=2)
+    for u in r.get("Users", []):
+        if (_atributo(u, "email") or "").lower() == email:
+            return u
+    return None
+
+
+def _exigir_operador(operador: bool) -> None:
+    if not operador:
+        raise ErrorHttp(403, "PROHIBIDO", "Solo los operadores gestionan operadores")
+
+
+def listar_operadores(operador: bool) -> list[dict]:
+    _exigir_operador(operador)
+    return sorted((_usuario_publico(u) for u in _miembros()), key=lambda u: u.get("email", ""))
+
+
+def promover_operador(cuerpo_json: str | None, operador: bool) -> dict:
+    _exigir_operador(operador)
+    try:
+        cuerpo = json.loads(cuerpo_json or "")
+    except ValueError:
+        raise ErrorHttp(400, "CUERPO_INVALIDO", "El cuerpo debe ser JSON") from None
+    if not isinstance(cuerpo, dict):
+        raise ErrorHttp(400, "CUERPO_INVALIDO", "El cuerpo debe ser un objeto")
+    email = _email_valido(cuerpo.get("email"))
+    usuario = _buscar_usuario(email)
+    if not usuario:
+        raise ErrorHttp(404, "USUARIO_NO_ENCONTRADO", "El usuario debe crear su cuenta primero")
+    cognito().admin_add_user_to_group(UserPoolId=_pool(), Username=usuario["Username"], GroupName=GRUPO_OPERADORES)
+    return _usuario_publico(usuario)
+
+
+def quitar_operador(email_ruta: str, event: dict, operador: bool) -> dict:
+    _exigir_operador(operador)
+    email = _email_valido(email_ruta)
+    claims = _claims(event)
+    if email == (claims.get("email") or "").strip().lower():
+        raise ErrorHttp(409, "AUTO_REVOCACION", "No puedes quitarte a ti mismo como operador")
+    miembros = _miembros()
+    objetivo = next((u for u in miembros if (_atributo(u, "email") or "").lower() == email), None)
+    if not objetivo:
+        raise ErrorHttp(404, "USUARIO_NO_ENCONTRADO", "Esa persona no es operadora")
+    if claims.get("sub") and objetivo["Username"] == claims["sub"]:
+        raise ErrorHttp(409, "AUTO_REVOCACION", "No puedes quitarte a ti mismo como operador")
+    if len(miembros) <= 1:
+        raise ErrorHttp(409, "ULTIMO_OPERADOR", "No se puede quitar al último operador")
+    cognito().admin_remove_user_from_group(UserPoolId=_pool(), Username=objetivo["Username"], GroupName=GRUPO_OPERADORES)
+    return _usuario_publico(objetivo)
+
+
 # ---------- enrutador ----------
 
 def despachar(event: dict) -> dict:
@@ -324,6 +430,12 @@ def despachar(event: dict) -> dict:
         if not operador:
             raise ErrorHttp(403, "PROHIBIDO", "Solo los operadores consultan antenas")
         return respuesta(200, listar_antenas(params))
+    if (recurso, metodo) == ("/operadores", "GET"):
+        return respuesta(200, listar_operadores(operador))
+    if (recurso, metodo) == ("/operadores", "POST"):
+        return respuesta(200, promover_operador(event.get("body"), operador))
+    if (recurso, metodo) == ("/operadores/{email}", "DELETE"):
+        return respuesta(200, quitar_operador(unquote(ruta.get("email", "")), event, operador))
     raise ErrorHttp(404, "RUTA_DESCONOCIDA", f"{metodo} {recurso} no existe")
 
 

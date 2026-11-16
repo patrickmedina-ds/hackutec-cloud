@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { cerrarSesion, completarCallback, iniciarSesion, leerSesion } from './auth';
+import { cerrarSesion, completarCallback, crearCuenta, iniciarSesion, leerSesion } from './auth';
 import type { Sesion } from './auth';
 import { crearApi } from './api';
 import { esModoDemo } from './config';
-import { crearDemo } from './demo';
+import { EMAIL_DEMO, crearDemo } from './demo';
 import { MisReportes } from './MisReportes';
 import { NuevoReporteVista } from './NuevoReporte';
 import { OperadorVista } from './Operador';
@@ -115,7 +115,11 @@ export function App({ cfg }: { cfg: Config }) {
         <p>Inicia sesión para reportar un problema de tu servicio o, si eres operador, gestionar incidencias.</p>
         {errAuth && <Aviso tipo="error">{errAuth}</Aviso>}
         {incompleta && <Aviso tipo="error">Falta configuración de Cognito en config.json.</Aviso>}
-        <button className="btn" disabled={incompleta} onClick={() => iniciarSesion(cfg)}>Iniciar sesión</button>
+        <div className="fila acciones-ingreso">
+          <button className="btn" disabled={incompleta} onClick={() => iniciarSesion(cfg)}>Iniciar sesión</button>
+          <button className="btn btn-sec" disabled={incompleta} onClick={() => crearCuenta(cfg)}>Crear cuenta</button>
+        </div>
+        <p className="muted">Los clientes crean su cuenta aquí. Un operador existente puede darte acceso de operador.</p>
         <p className="muted">¿Solo quieres ver cómo funciona? Abre la <a href="?demo=1">demostración con datos de ejemplo</a>.</p>
       </section>
     );
@@ -132,7 +136,7 @@ export function App({ cfg }: { cfg: Config }) {
             <button key={v} className="tab" aria-current={vistaActual === v ? 'page' : undefined} onClick={() => setVista(v)}>{t}</button>
           ))}
         </nav>
-        {vistaActual === 'panel' && rol === 'operador' && <OperadorVista key={`${rolDemo}-${version}`} api={api} />}
+        {vistaActual === 'panel' && rol === 'operador' && <OperadorVista key={`${rolDemo}-${version}`} api={api} miEmail={demo ? EMAIL_DEMO : sesion?.email} />}
         {vistaActual === 'nuevo' && <NuevoReporteVista api={api} onCreado={() => setVersion((v) => v + 1)} />}
         {vistaActual === 'mis' && <MisReportes api={api} version={version} />}
       </>

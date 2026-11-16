@@ -1,5 +1,6 @@
 boto3
 moto[all]
+joserfc
 pytest
 jsonschema
 cfn-lint

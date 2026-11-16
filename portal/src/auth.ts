@@ -64,12 +64,17 @@ function guardarSesion(s: Sesion) {
   }
 }
 
-export async function iniciarSesion(cfg: Config): Promise<void> {
+async function irACognito(cfg: Config, ruta: 'oauth2/authorize' | 'signup'): Promise<void> {
   const { verifier, challenge, state } = await crearPkce();
   sessionStorage.setItem(K_VERIFIER, verifier);
   sessionStorage.setItem(K_STATE, state);
-  window.location.assign(urlAutorizacion(cfg, challenge, state));
+  window.location.assign(urlAutorizacion(cfg, challenge, state, ruta));
 }
+
+export const iniciarSesion = (cfg: Config) => irACognito(cfg, 'oauth2/authorize');
+
+/** Registro de Cognito (managed login) con el mismo PKCE/state que el login. */
+export const crearCuenta = (cfg: Config) => irACognito(cfg, 'signup');
 
 /** Si la URL trae ?code=..., canjea el código por tokens. Devuelve la sesión o null. */
 export async function completarCallback(cfg: Config, fetchImpl: typeof fetch = (...a) => fetch(...a)): Promise<Sesion | null> {

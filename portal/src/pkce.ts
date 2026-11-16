@@ -33,6 +33,7 @@ export function urlAutorizacion(
   cfg: { cognitoDomain: string; clientId: string; redirectUri: string },
   challenge: string,
   state: string,
+  ruta: 'oauth2/authorize' | 'signup' = 'oauth2/authorize',
 ): string {
   const p = new URLSearchParams({
     response_type: 'code',
@@ -43,7 +44,7 @@ export function urlAutorizacion(
     code_challenge: challenge,
     state,
   });
-  return `${normalizarDominio(cfg.cognitoDomain)}/oauth2/authorize?${p}`;
+  return `${normalizarDominio(cfg.cognitoDomain)}/${ruta}?${p}`;
 }
 
 export function cuerpoToken(

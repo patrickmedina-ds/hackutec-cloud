@@ -1,7 +1,7 @@
 import { puedeTransicionar } from './transiciones';
 import { ApiError } from './types';
 import type {
-  Antena, Api, Reporte, RespuestaAnalitica, Estado, FiltrosIncidencias, Incidencia, NuevoReporte, Pagina, Rol, Transicion, TipoProblema, Zona, Nivel, Severidad,
+  Antena, Api, Operador, Reporte, RespuestaAnalitica, Estado, FiltrosIncidencias, Incidencia, NuevoReporte, Pagina, Rol, Transicion, TipoProblema, Zona, Nivel, Severidad,
 } from './types';
 
 const MIN = 60_000;
@@ -111,6 +111,9 @@ export function analiticaDemo<R extends Reporte>(reporte: R, dias = 7): Respuest
   return { reporte, dias, total: filas.length, filas: filas as RespuestaAnalitica<R>['filas'], cache: false };
 }
 
+/** Correo del operador que usa el modo demo (quien "inició sesión"). */
+export const EMAIL_DEMO = 'ana.operadora@telecorp.pe';
+
 export function crearDemo(rolInicial: Rol = 'operador'): Api {
   let rol: Rol = rolInicial;
   const incidencias: Incidencia[] = [];
@@ -118,6 +121,11 @@ export function crearDemo(rolInicial: Rol = 'operador'): Api {
   const propias = new Set<string>(); // reportes del usuario demo
   const antenas = antenasIniciales();
   let contador = 100;
+  const operadores: Operador[] = [
+    { email: EMAIL_DEMO, nombre: 'Ana Operadora', creado: iso(40 * 1440 * MIN), estado: 'CONFIRMED' },
+    { email: 'luis.turno@telecorp.pe', nombre: 'Luis Turno', creado: iso(12 * 1440 * MIN), estado: 'CONFIRMED' },
+  ];
+  const clientesDemo = new Set(['maria.cliente@correo.com', 'jorge.cliente@correo.com']);
 
   function sembrarHistorial(inc: Incidencia, creadoHaceMin: number) {
     const ruta = RUTAS[inc.estado];
@@ -266,6 +274,38 @@ export function crearDemo(rolInicial: Rol = 'operador'): Api {
       await espera(200);
       exigirOperador();
       return analiticaDemo(reporte, dias);
+    },
+    async listarOperadores() {
+      await espera();
+      exigirOperador();
+      return clonar([...operadores].sort((a, b) => a.email.localeCompare(b.email)));
+    },
+    async promoverOperador(email) {
+      await espera();
+      exigirOperador();
+      const e = email.trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) throw new ApiError(400, 'EMAIL_INVALIDO', 'Indica un correo válido');
+      if (!clientesDemo.has(e) && !operadores.some((o) => o.email === e)) {
+        throw new ApiError(404, 'USUARIO_NO_ENCONTRADO', 'El usuario debe crear su cuenta primero');
+      }
+      let op = operadores.find((o) => o.email === e);
+      if (!op) {
+        op = { email: e, creado: iso(3 * 1440 * MIN), estado: 'CONFIRMED' };
+        operadores.push(op);
+      }
+      return clonar(op);
+    },
+    async quitarOperador(email) {
+      await espera();
+      exigirOperador();
+      const e = email.trim().toLowerCase();
+      if (e === EMAIL_DEMO) throw new ApiError(409, 'AUTO_REVOCACION', 'No puedes quitarte a ti mismo como operador');
+      const i = operadores.findIndex((o) => o.email === e);
+      if (i < 0) throw new ApiError(404, 'USUARIO_NO_ENCONTRADO', 'Esa persona no es operadora');
+      if (operadores.length <= 1) throw new ApiError(409, 'ULTIMO_OPERADOR', 'No se puede quitar al último operador');
+      const [q] = operadores.splice(i, 1);
+      clientesDemo.add(q.email);
+      return clonar(q);
     },
     async listarZonas() { await espera(60); return clonar(ZONAS_DEMO); },
     async listarAntenas(f = {}) {

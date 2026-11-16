@@ -399,7 +399,7 @@ Resources:
           ThrottlingBurstLimit: !Ref ThrottlingRafaga
           MetricsEnabled: true
       Cors:
-        AllowMethods: "'GET,POST,PATCH,OPTIONS'"
+        AllowMethods: "'GET,POST,PATCH,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization'"
         AllowOrigin: !Sub "'${CorsOrigen}'"
         MaxAge: "'600'"
@@ -568,6 +568,43 @@ Resources:
                 type: aws_proxy
                 httpMethod: POST
                 uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
+          /operadores:
+            get:
+              summary: Operadores (miembros del grupo operadores)
+              security:
+                - CognitoAuth: []
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
+            post:
+              summary: Promover a operador a un usuario ya registrado (por correo)
+              security:
+                - CognitoAuth: []
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
+          /operadores/{email}:
+            delete:
+              summary: Quitar a un usuario del grupo operadores
+              security:
+                - CognitoAuth: []
+              parameters:
+                - { name: email, in: path, required: true, schema: { type: string } }
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncionApiIncidencias.Arn}/invocations
           /analitica/{reporte}:
             get:
               summary: Reportes de analítica en Athena (solo operadores)
@@ -664,13 +701,14 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub telecorp-${Stage}-api-incidencias
-      Description: Consultas y cambio de estado de incidencias; catálogo de zonas y antenas
+      Description: Consultas y cambio de estado de incidencias; catálogo de zonas y antenas; gestión del grupo operadores
       CodeUri: src/api_incidencias/
       Handler: app.lambda_handler
       Timeout: 15
       Environment:
         Variables:
           POWERTOOLS_SERVICE_NAME: !Sub telecorp-${Stage}-api-incidencias
+          USER_POOL_ID: !Ref UserPool
       Role: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolLabNombre}
 
   PermisoApiIncidencias:

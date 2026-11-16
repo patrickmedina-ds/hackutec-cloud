@@ -84,6 +84,13 @@ export interface Antena {
   ultimaLectura: string;
 }
 
+export interface Operador {
+  email: string;
+  nombre?: string;
+  creado: string;
+  estado: string;
+}
+
 export interface FiltrosIncidencias {
   zonaId?: string;
   estado?: Estado | '';
@@ -125,6 +132,9 @@ export interface Api {
   listarZonas(): Promise<Zona[]>;
   listarAntenas(f?: { zonaId?: string; estado?: EstadoAntena | '' }): Promise<Antena[]>;
   analitica<R extends Reporte>(reporte: R, dias?: number): Promise<RespuestaAnalitica<R>>;
+  listarOperadores(): Promise<Operador[]>;
+  promoverOperador(email: string): Promise<Operador>;
+  quitarOperador(email: string): Promise<Operador>;
   /** Solo demo: cambia el rol activo. */
   setRolDemo?(rol: Rol): void;
 }

@@ -123,6 +123,60 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/Antena' }
+  /operadores:
+    get:
+      summary: Listar operadores (solo operadores)
+      responses:
+        '200':
+          description: Miembros del grupo `operadores`
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Operador' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      summary: Promover a operador a un usuario que ya creó su cuenta (solo operadores)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Usuario agregado al grupo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operador' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404':
+          description: El usuario no existe ("El usuario debe crear su cuenta primero")
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorCuerpo' }
+  /operadores/{email}:
+    delete:
+      summary: Quitar a un usuario del grupo operadores (solo operadores)
+      parameters:
+        - { name: email, in: path, required: true, schema: { type: string, format: email }, description: Correo codificado en URL }
+      responses:
+        '200':
+          description: Usuario quitado del grupo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operador' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409':
+          description: No puedes quitarte a ti mismo o es el último operador
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorCuerpo' }
 components:
   securitySchemes:
     cognito:
@@ -206,6 +260,18 @@ components:
         ciudad: { type: string }
         lat: { type: number }
         lon: { type: number }
+    ErrorCuerpo:
+      type: object
+      properties:
+        codigo: { type: string }
+        mensaje: { type: string }
+    Operador:
+      type: object
+      properties:
+        email: { type: string, format: email }
+        nombre: { type: string }
+        creado: { type: string, format: date-time }
+        estado: { type: string, description: 'Estado Cognito, p. ej. CONFIRMED' }
     Antena:
       type: object
       properties:
