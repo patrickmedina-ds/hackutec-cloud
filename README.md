@@ -12,7 +12,7 @@ Plataforma **100 % serverless** para que Red TeleCorp reciba, priorice y atienda
 - **Recurrencia:** si una antena falla 3 veces o más en 7 días, se abre un ticket estructural con prioridad alta.
 - **Aviso a usuarios:** SMS o correo en cada cambio relevante (en revisión, atendida, solucionada).
 - **Histórico y analítica:** todos los eventos llegan a S3 por Firehose y se consultan con vistas de Athena; el operador ve los reportes en el portal (`GET /analitica/{reporte}`).
-- **IA:** Amazon Bedrock clasifica el tipo y la severidad de cada reporte, resume los incidentes colectivos y redacta los avisos. Si la IA falla o tarda más de 8 s, reglas locales toman el relevo.
+- **IA:** Azure OpenAI (gpt-4.1-mini) clasifica el tipo y la severidad de cada reporte, resume los incidentes colectivos y redacta los avisos. Si la IA falla o tarda más de 8 s, reglas locales toman el relevo.
 
 
 ## Entorno desplegado (stage `dev`)
@@ -22,7 +22,7 @@ Plataforma **100 % serverless** para que Red TeleCorp reciba, priorice y atienda
 | Portal (usuario y operador) | https://green-glacier-0a847041e.4.azurestaticapps.net/ |
 | Página de estado pública | https://victorious-river-026920e1e.5.azurestaticapps.net |
 | API REST | https://v8wh8zzm8e.execute-api.us-east-1.amazonaws.com/dev |
-| Diagrama | Entregado aparte (draw.io) |
+| Diagrama | [arquitectura.html](arquitectura.html) |
 
 El guion del pitch y la demo en vivo están en [docs/pitch.md](docs/pitch.md).
 
@@ -38,24 +38,24 @@ El diagrama completo, con las rutas de datos y los eventos, está en **[arquitec
 
 | Nube | Responsabilidad |
 |---|---|
-| **AWS** (`us-east-1`) | Portal (CloudFront + S3), API REST con WAF y cuotas, cola SQS de reportes, DynamoDB como fuente de verdad, IoT Core y Kinesis para la telemetría, Step Functions para la automatización, EventBridge como bus, SNS/SES para los avisos, Claude en Bedrock para la IA, y Firehose + S3 + Athena para el histórico y la analítica. |
+| **AWS** (`us-east-1`) | API REST con WAF y cuotas, cola SQS de reportes, DynamoDB como fuente de verdad, IoT Core y Kinesis para la telemetría, Step Functions para la automatización, EventBridge como bus, y Firehose + S3 + Athena para el histórico y la analítica. |
 | **Azure** (`westus2`) | Respaldo de todos los eventos en Blob Storage GRS, réplica activa del estado en Cosmos DB serverless, Event Grid como canal de réplica (con credencial federada de Entra ID, sin llaves), Azure Functions (Flex Consumption) para replicar y notificar, Communication Services como canal de respaldo para SMS y correo, y la Static Web App con la página de estado por zona. |
 
 ## Estructura de carpetas
 
 Propiedad de carpetas por bloque (`contratos/README.md`):
 
-| Bloque | Modelo | Carpetas que escribe |
-|---|---|---|
-| A · Step Functions | Opus | `aws/stacks/orquestacion.yaml`, `aws/statemachines/`, `aws/src/sfn_*/` |
-| B · Federación y puente | Opus | `aws/stacks/puente.yaml`, `aws/src/puente_multinube/`, `azure/terraform/federacion.tf`, `docs/federacion.md` |
-| C · AWS núcleo | Sonnet | `aws/template.yaml`, `aws/src/registrar_reporte/`, `aws/src/evaluar_antena/`, `aws/src/api_incidencias/`, `aws/samconfig.toml` |
-| D · Analítica | Sonnet | `aws/stacks/analitica.yaml`, `aws/analitica/`, `aws/src/api_analitica/` |
-| E · Azure | Sonnet | `azure/` (excepto `federacion.tf`) |
-| F · Portal | Sonnet | `portal/` |
-| G · IA | Sonnet | `aws/stacks/ia.yaml`, `aws/src/clasificar_ia/` |
-| H · Simulador | Haiku | `simulador/` |
-| I · Datos y scripts | Haiku | `datos/`, `scripts/`, `README.md` raíz |
+| Bloque | Carpetas que escribe |
+|---|---|
+| A · Step Functions | `aws/stacks/orquestacion.yaml`, `aws/statemachines/`, `aws/src/sfn_*/` |
+| B · Federación y puente | `aws/stacks/puente.yaml`, `aws/src/puente_multinube/`, `azure/terraform/federacion.tf`, `docs/federacion.md` |
+| C · AWS núcleo | `aws/template.yaml`, `aws/src/registrar_reporte/`, `aws/src/evaluar_antena/`, `aws/src/api_incidencias/`, `aws/samconfig.toml` |
+| D · Analítica | `aws/stacks/analitica.yaml`, `aws/analitica/`, `aws/src/api_analitica/` |
+| E · Azure | `azure/` (excepto `federacion.tf`) |
+| F · Portal | `portal/` |
+| G · IA | `aws/stacks/ia.yaml`, `aws/src/clasificar_ia/` |
+| H · Simulador | `simulador/` |
+| I · Datos y scripts | `datos/`, `scripts/`, `README.md` raíz |
 
 Carpetas transversales:
 
@@ -145,7 +145,7 @@ Por eso el costo en reposo es prácticamente cero, y el costo crece con los repo
 | Arquitectura de la solución | 0–3 | Diagrama en [arquitectura.html](arquitectura.html), infraestructura como código en SAM y Terraform, y una capa común compartida. |
 | Pitch de 5 minutos | 0–2 | Se presenta aparte de este repositorio. |
 | Solución completamente serverless | 0–2 | Ningún servicio con servidores fijos: Lambda, Azure Functions, Step Functions, DynamoDB en modo on-demand y Cosmos DB serverless. |
-| Uso de IA | 0–3 | Amazon Bedrock clasifica y resume, redacta avisos, con respaldo de reglas locales. |
+| Uso de IA | 0–3 | Azure OpenAI clasifica y resume, redacta avisos, con respaldo de reglas locales. |
 
 ## Pruebas
 

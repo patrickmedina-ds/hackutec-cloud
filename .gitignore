@@ -13,3 +13,7 @@ dist/
 .env
 .DS_Store
 .aws/credentials
+
+# Credenciales locales
+.aws/
+*.bkp

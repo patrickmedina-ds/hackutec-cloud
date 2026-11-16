@@ -76,17 +76,17 @@ Cada stack anidado recibe **exactamente** estos parámetros desde la raíz:
 
 ## Propiedad de carpetas (fase 1)
 
-| Bloque | Modelo | Carpetas que escribe |
-|---|---|---|
-| A · Step Functions | Opus | `aws/stacks/orquestacion.yaml`, `aws/statemachines/`, `aws/src/sfn_*/` |
-| B · Federación y puente | Opus | `aws/stacks/puente.yaml`, `aws/src/puente_multinube/`, `azure/terraform/federacion.tf`, `docs/federacion.md` |
-| C · AWS núcleo | Sonnet | `aws/template.yaml`, `aws/src/registrar_reporte/`, `aws/src/evaluar_antena/`, `aws/src/api_incidencias/`, `aws/samconfig.toml` |
-| D · Analítica (antes GCP) | Sonnet | `aws/stacks/analitica.yaml`, `aws/analitica/`, `aws/src/api_analitica/` |
-| E · Azure | Sonnet | `azure/` (excepto `federacion.tf`) |
-| F · Portal | Sonnet | `portal/` |
-| G · IA | Sonnet | `aws/stacks/ia.yaml`, `aws/src/clasificar_ia/` |
-| H · Simulador | Haiku | `simulador/` |
-| I · Datos y scripts | Haiku | `datos/`, `scripts/`, `README.md` raíz |
+| Bloque | Carpetas que escribe |
+|---|---|
+| A · Step Functions | `aws/stacks/orquestacion.yaml`, `aws/statemachines/`, `aws/src/sfn_*/` |
+| B · Federación y puente | `aws/stacks/puente.yaml`, `aws/src/puente_multinube/`, `azure/terraform/federacion.tf`, `docs/federacion.md` |
+| C · AWS núcleo | `aws/template.yaml`, `aws/src/registrar_reporte/`, `aws/src/evaluar_antena/`, `aws/src/api_incidencias/`, `aws/samconfig.toml` |
+| D · Analítica (antes GCP) | `aws/stacks/analitica.yaml`, `aws/analitica/`, `aws/src/api_analitica/` |
+| E · Azure | `azure/` (excepto `federacion.tf`) |
+| F · Portal | `portal/` |
+| G · IA | `aws/stacks/ia.yaml`, `aws/src/clasificar_ia/` |
+| H · Simulador | `simulador/` |
+| I · Datos y scripts | `datos/`, `scripts/`, `README.md` raíz |
 
 Nadie edita `contratos/` ni `aws/layers/comun/` durante la fase 1.
 
@@ -105,7 +105,7 @@ Detalle de cada bloque en `contratos/CAMBIOS_PROPUESTOS_*.md`. Quedan aceptadas:
 ## Cambio de alcance: sin Google Cloud
 
 El proyecto quedó en **dos nubes, AWS y Azure** (la cuenta de GCP no tenía facturación activa):
-- IA: Gemini en Vertex → **Amazon Bedrock** (`aws/stacks/ia.yaml`).
+- IA: Gemini en Vertex → **Azure OpenAI** (`aws/stacks/ia.yaml` + `azure/terraform/openai.tf`).
 - Analítica: BigQuery y Looker Studio → **Firehose + S3 + Athena** (`aws/stacks/analitica.yaml`) y API `GET /analitica/{reporte}`.
 - Respaldo en otra nube: Cloud Storage → **Azure Blob Storage GRS** (`azure/terraform/respaldo.tf`).
 - Se eliminó el pronóstico con BigQuery ML.
